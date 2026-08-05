@@ -1,7 +1,8 @@
 use super::{
-    HEADER_LEN, KdfProfile, Note, PAYLOAD_LENGTH_OFFSET, PAYLOAD_LIMIT, Vault, VaultCodec,
-    VaultError, WRAPPED_KEY_OFFSET, validate_password,
+    FaultPoint, HEADER_LEN, KdfProfile, Note, PAYLOAD_LENGTH_OFFSET, PAYLOAD_LIMIT, Vault,
+    VaultCodec, VaultError, VaultService, WRAPPED_KEY_OFFSET, validate_password,
 };
+use std::fs;
 use uuid::Uuid;
 
 fn sample_vault() -> Vault {
@@ -110,18 +111,104 @@ fn password_requires_eight_unicode_characters() {
 }
 
 #[test]
-fn rewrapping_key_changes_password_without_changing_data_key() {
-    let codec = VaultCodec::new(KdfProfile::testing());
-    let (container, original_key) = codec.encrypt_new(&sample_vault(), "old password").unwrap();
+fn service_creates_saves_opens_and_changes_password() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.snotes");
+    let service = VaultService::testing();
+    let mut session = service.create(&path, "old password").unwrap();
+    let original_key: [u8; 32] = session.data_key.expose().try_into().unwrap();
+    session.vault = sample_vault();
+    session.dirty = true;
 
-    let changed = codec
-        .change_password(&container, &original_key, "new password")
+    service.save(&mut session).unwrap();
+    service
+        .change_password(&mut session, "new password")
         .unwrap();
-    let (_, opened_key) = codec.decrypt(&changed, "new password").unwrap();
+    assert_eq!(session.data_key.expose(), original_key);
 
-    assert_eq!(opened_key.expose(), original_key.expose());
     assert!(matches!(
-        codec.decrypt(&changed, "old password"),
+        service.open(&path, "old password"),
         Err(VaultError::InvalidPasswordOrKey)
     ));
+    let opened = service.open(&path, "new password").unwrap();
+    assert_eq!(opened.vault, sample_vault());
+    assert!(!opened.dirty);
+}
+
+#[test]
+fn save_refuses_to_overwrite_external_change_or_deletion() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.snotes");
+    let service = VaultService::testing();
+    let mut changed = service.create(&path, "correct horse").unwrap();
+    changed.dirty = true;
+    fs::write(&path, b"changed outside").unwrap();
+
+    assert!(matches!(
+        service.save(&mut changed),
+        Err(VaultError::FileConflict)
+    ));
+
+    let deleted_path = directory.path().join("deleted.snotes");
+    let mut deleted = service.create(&deleted_path, "correct horse").unwrap();
+    deleted.dirty = true;
+    fs::remove_file(&deleted_path).unwrap();
+    assert!(matches!(
+        service.save(&mut deleted),
+        Err(VaultError::FileConflict)
+    ));
+}
+
+#[test]
+fn every_atomic_save_failure_leaves_old_or_new_valid_vault() {
+    for point in FaultPoint::ALL {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("notes.snotes");
+        let service = VaultService::testing();
+        let mut session = service.create(&path, "correct horse").unwrap();
+        session.vault = sample_vault();
+        session.dirty = true;
+
+        assert!(matches!(
+            service.save_with_fault(&mut session, point),
+            Err(VaultError::WriteFailed)
+        ));
+
+        let opened = service.open(&path, "correct horse").unwrap();
+        let expected = if point == FaultPoint::AfterReplace {
+            sample_vault()
+        } else {
+            Vault::default()
+        };
+        assert_eq!(opened.vault, expected);
+        for entry in fs::read_dir(directory.path()).unwrap() {
+            let bytes = fs::read(entry.unwrap().path()).unwrap();
+            assert!(
+                !bytes
+                    .windows("confidential".len())
+                    .any(|window| window == b"confidential")
+            );
+        }
+    }
+}
+
+#[test]
+fn conflict_can_be_saved_as_an_encrypted_copy() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.snotes");
+    let copy = directory.path().join("copy.snotes");
+    let service = VaultService::testing();
+    let mut session = service.create(&path, "correct horse").unwrap();
+    session.vault = sample_vault();
+    session.dirty = true;
+    fs::write(&path, b"changed outside").unwrap();
+
+    service
+        .save_copy(&mut session, &copy, "correct horse")
+        .unwrap();
+
+    assert_eq!(
+        service.open(&copy, "correct horse").unwrap().vault,
+        sample_vault()
+    );
 }
