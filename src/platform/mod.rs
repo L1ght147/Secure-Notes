@@ -158,7 +158,7 @@ mod windows_events {
                 RemoteDesktop::{NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification},
             },
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MSG,
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG,
                 RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
             },
         },
@@ -203,7 +203,7 @@ mod windows_events {
                 0,
                 0,
                 0,
-                Some(HWND_MESSAGE),
+                None,
                 None,
                 Some(instance),
                 None,

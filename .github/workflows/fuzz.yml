@@ -1,0 +1,19 @@
+name: Parser fuzz smoke test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install --locked cargo-fuzz
+      - run: cargo fuzz run container_parser -- -max_total_time=60
+      - run: cargo fuzz run payload_parser -- -max_total_time=60

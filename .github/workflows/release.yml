@@ -1,0 +1,54 @@
+name: Portable Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy, rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+
+  package:
+    needs: test
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: cargo build --release --target x86_64-pc-windows-msvc
+      - run: cargo install --locked cargo-about --features cli --version 0.9.1
+      - name: Package portable archive
+        shell: pwsh
+        run: |
+          $stage = "dist/SecureNotes-windows-x64"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/secure-notes.exe" "$stage/SecureNotes.exe"
+          Copy-Item "README.md" "$stage/README.md"
+          Copy-Item "SECURITY.md" "$stage/SECURITY.md"
+          Copy-Item "THIRD_PARTY_NOTICES.txt" "$stage/THIRD_PARTY_NOTICES.txt"
+          cargo about generate -o "$stage/RUST_DEPENDENCY_NOTICES.html" about.hbs
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/SecureNotes-windows-x64.zip"
+          $hash = (Get-FileHash "dist/SecureNotes-windows-x64.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  SecureNotes-windows-x64.zip" | Out-File -Encoding ascii "dist/SHA256SUMS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SecureNotes-windows-x64
+          path: |
+            dist/SecureNotes-windows-x64.zip
+            dist/SHA256SUMS
+          if-no-files-found: error

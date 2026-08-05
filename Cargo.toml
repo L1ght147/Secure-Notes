@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.92"
 publish = false
 
+[features]
+default = []
+fuzzing = []
+
 [dependencies]
 arboard = { version = "3.6.1", default-features = false }
 blake3 = { version = "1.8.2", features = ["pure"] }

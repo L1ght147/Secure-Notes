@@ -16,6 +16,9 @@ use uuid::Uuid;
 
 use crate::platform::{NativePlatformSecurity, PlatformSecurity};
 
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
+
 const MAGIC: [u8; 8] = *b"SNOTES\0\0";
 const FORMAT_VERSION: u16 = 1;
 const SCHEMA_VERSION: u16 = 1;
@@ -358,7 +361,7 @@ impl VaultService {
         }
         let vault = Vault::default();
         let (container, data_key) = self.codec.encrypt_new(&vault, password)?;
-        atomic_write(path, &container, None)?;
+        atomic_write(path, &container, None, false)?;
         Ok(VaultSession {
             path: path.to_path_buf(),
             vault,
@@ -411,7 +414,7 @@ impl VaultService {
             &session.data_key,
             new_password,
         )?;
-        atomic_write(&session.path, &container, None)?;
+        atomic_write(&session.path, &container, None, true)?;
         session.fingerprint = fingerprint(&container)?;
         session.dirty = false;
         Ok(())
@@ -430,7 +433,7 @@ impl VaultService {
         let container =
             self.codec
                 .encrypt(&session.vault, password, &session.data_key, random_array()?)?;
-        atomic_write(new_path, &container, None)?;
+        atomic_write(new_path, &container, None, false)?;
         session.path = new_path.to_path_buf();
         session.fingerprint = fingerprint(&container)?;
         session.dirty = false;
@@ -446,7 +449,7 @@ impl VaultService {
         let container = self
             .codec
             .encrypt_updated(&existing, &session.vault, &session.data_key)?;
-        atomic_write(&session.path, &container, fault)?;
+        atomic_write(&session.path, &container, fault, true)?;
         session.fingerprint = fingerprint(&container)?;
         session.dirty = false;
         Ok(())
@@ -532,6 +535,7 @@ fn atomic_write(
     path: &Path,
     ciphertext: &[u8],
     fault: Option<FaultPoint>,
+    replace_existing: bool,
 ) -> Result<(), VaultError> {
     let parent = path.parent().ok_or(VaultError::WriteFailed)?;
     let file_name = path
@@ -564,7 +568,7 @@ fn atomic_write(
         inject_fault(fault, FaultPoint::AfterSync)?;
         drop(file);
         inject_fault(fault, FaultPoint::BeforeReplace)?;
-        replace_file(&temporary, path)?;
+        replace_file(&temporary, path, replace_existing)?;
         inject_fault(fault, FaultPoint::AfterReplace)?;
         sync_parent(parent)?;
         Ok(())
@@ -585,12 +589,25 @@ fn inject_fault(actual: Option<FaultPoint>, current: FaultPoint) -> Result<(), V
 }
 
 #[cfg(not(windows))]
-fn replace_file(temporary: &Path, destination: &Path) -> Result<(), VaultError> {
-    fs::rename(temporary, destination).map_err(|_| VaultError::WriteFailed)
+fn replace_file(
+    temporary: &Path,
+    destination: &Path,
+    replace_existing: bool,
+) -> Result<(), VaultError> {
+    if replace_existing {
+        fs::rename(temporary, destination).map_err(|_| VaultError::WriteFailed)
+    } else {
+        fs::hard_link(temporary, destination).map_err(|_| VaultError::WriteFailed)?;
+        fs::remove_file(temporary).map_err(|_| VaultError::WriteFailed)
+    }
 }
 
 #[cfg(windows)]
-fn replace_file(temporary: &Path, destination: &Path) -> Result<(), VaultError> {
+fn replace_file(
+    temporary: &Path,
+    destination: &Path,
+    replace_existing: bool,
+) -> Result<(), VaultError> {
     use std::os::windows::ffi::OsStrExt;
     use windows::{
         Win32::Storage::FileSystem::{
@@ -605,11 +622,16 @@ fn replace_file(temporary: &Path, destination: &Path) -> Result<(), VaultError> 
         .encode_wide()
         .chain(Some(0))
         .collect();
+    let flags = if replace_existing {
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+    } else {
+        MOVEFILE_WRITE_THROUGH
+    };
     unsafe {
         MoveFileExW(
             PCWSTR(temporary.as_ptr()),
             PCWSTR(destination.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            flags,
         )
     }
     .map_err(|_| VaultError::WriteFailed)
@@ -665,18 +687,7 @@ impl Header {
             return Err(VaultError::MalformedContainer);
         }
         let payload_len = read_u64(container, PAYLOAD_LENGTH_OFFSET);
-        let max_ciphertext = PAYLOAD_LIMIT as u64 + TAG_LEN as u64;
-        if payload_len > max_ciphertext {
-            return Err(VaultError::PayloadTooLarge);
-        }
-        if payload_len < TAG_LEN as u64
-            || usize::try_from(payload_len)
-                .ok()
-                .and_then(|len| HEADER_LEN.checked_add(len))
-                != Some(container.len())
-        {
-            return Err(VaultError::MalformedContainer);
-        }
+        validate_ciphertext_length(payload_len, container.len())?;
 
         Ok(Self {
             vault_id: container[12..28].try_into().unwrap(),
@@ -705,6 +716,22 @@ impl Header {
         bytes[160..168].copy_from_slice(&self.payload_len.to_le_bytes());
         bytes
     }
+}
+
+fn validate_ciphertext_length(payload_len: u64, container_len: usize) -> Result<(), VaultError> {
+    let max_ciphertext = PAYLOAD_LIMIT as u64 + TAG_LEN as u64;
+    if payload_len > max_ciphertext {
+        return Err(VaultError::PayloadTooLarge);
+    }
+    if payload_len < TAG_LEN as u64
+        || usize::try_from(payload_len)
+            .ok()
+            .and_then(|len| HEADER_LEN.checked_add(len))
+            != Some(container_len)
+    {
+        return Err(VaultError::MalformedContainer);
+    }
+    Ok(())
 }
 
 fn validate_schema(vault: &Vault) -> Result<(), VaultError> {

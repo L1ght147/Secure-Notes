@@ -1,7 +1,9 @@
 use super::{
     FaultPoint, HEADER_LEN, KdfProfile, Note, PAYLOAD_LENGTH_OFFSET, PAYLOAD_LIMIT, Vault,
-    VaultCodec, VaultError, VaultService, WRAPPED_KEY_OFFSET, validate_password,
+    VaultCodec, VaultError, VaultService, WRAPPED_KEY_OFFSET, atomic_write,
+    validate_ciphertext_length, validate_password,
 };
+use std::ffi::CStr;
 use std::fs;
 use uuid::Uuid;
 
@@ -32,6 +34,30 @@ fn encrypted_container_round_trips_unicode_without_plaintext() {
             .any(|window| window == b"confidential")
     );
     drop(data_key);
+}
+
+#[test]
+fn linked_libsodium_version_is_pinned() {
+    super::ensure_sodium().unwrap();
+    let version = unsafe { CStr::from_ptr(libsodium_sys::sodium_version_string()) };
+    assert_eq!(version.to_bytes(), b"1.0.22");
+}
+
+#[test]
+fn production_service_uses_argon2id_256_mib_and_three_passes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("production.snotes");
+    let service = VaultService::default();
+    service.create(&path, "correct horse").unwrap();
+    let container = fs::read(&path).unwrap();
+
+    assert_eq!(u64::from_le_bytes(container[44..52].try_into().unwrap()), 3);
+    assert_eq!(
+        u64::from_le_bytes(container[52..60].try_into().unwrap()),
+        256 * 1024 * 1024
+    );
+    assert_eq!(u32::from_le_bytes(container[60..64].try_into().unwrap()), 2);
+    service.open(&path, "correct horse").unwrap();
 }
 
 #[test]
@@ -98,6 +124,20 @@ fn payload_size_limit_is_checked_before_allocation() {
     assert!(matches!(
         codec.decrypt(&container, "correct horse"),
         Err(VaultError::PayloadTooLarge)
+    ));
+}
+
+#[test]
+fn payload_limit_accepts_exact_boundary_and_rejects_one_byte_more() {
+    let maximum = PAYLOAD_LIMIT as u64 + 16;
+    assert!(validate_ciphertext_length(maximum, HEADER_LEN + maximum as usize).is_ok());
+    assert!(matches!(
+        validate_ciphertext_length(maximum + 1, HEADER_LEN),
+        Err(VaultError::PayloadTooLarge)
+    ));
+    assert!(matches!(
+        validate_ciphertext_length(15, HEADER_LEN + 15),
+        Err(VaultError::MalformedContainer)
     ));
 }
 
@@ -236,4 +276,46 @@ fn soft_lock_retry_requires_password_before_saving_ram_changes() {
         service.open(&path, "correct horse").unwrap().vault,
         sample_vault()
     );
+}
+
+#[test]
+fn complete_vault_lifecycle_never_writes_known_plaintext() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.snotes");
+    let service = VaultService::testing();
+    let mut session = service.create(&path, "correct horse").unwrap();
+    session.vault.notes.push(Note {
+        id: Uuid::from_u128(99),
+        title: "PLAINTEXT-CANARY-TITLE".into(),
+        body: "PLAINTEXT-CANARY-BODY".into(),
+        modified_at: 42,
+    });
+    session.dirty = true;
+    service.save(&mut session).unwrap();
+    service
+        .change_password(&mut session, "different password")
+        .unwrap();
+
+    for entry in fs::read_dir(directory.path()).unwrap() {
+        let bytes = fs::read(entry.unwrap().path()).unwrap();
+        for canary in [
+            b"PLAINTEXT-CANARY-TITLE".as_slice(),
+            b"PLAINTEXT-CANARY-BODY",
+        ] {
+            assert!(!bytes.windows(canary.len()).any(|window| window == canary));
+        }
+    }
+}
+
+#[test]
+fn create_mode_atomic_write_never_replaces_an_existing_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("existing.snotes");
+    fs::write(&path, b"original").unwrap();
+
+    assert!(matches!(
+        atomic_write(&path, b"replacement", None, false),
+        Err(VaultError::WriteFailed)
+    ));
+    assert_eq!(fs::read(path).unwrap(), b"original");
 }
