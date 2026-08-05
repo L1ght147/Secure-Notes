@@ -1,6 +1,43 @@
+use std::time::Duration;
+
 use uuid::Uuid;
 
+use crate::platform::SessionEvent;
 use crate::vault::{Note, Vault};
+
+pub struct AutoLockTimer {
+    last_activity: Duration,
+    timeout: Duration,
+}
+
+impl AutoLockTimer {
+    pub fn new(timeout: Duration) -> Self {
+        Self {
+            last_activity: Duration::ZERO,
+            timeout,
+        }
+    }
+
+    pub fn record_activity(&mut self, now: Duration) {
+        self.last_activity = now;
+    }
+
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
+
+    pub fn expired(&self, now: Duration) -> bool {
+        now.saturating_sub(self.last_activity) >= self.timeout
+    }
+}
+
+pub fn lock_for_session_event(event: SessionEvent, enabled: bool) -> bool {
+    enabled && matches!(event, SessionEvent::Locked | SessionEvent::Sleeping)
+}
+
+pub fn close_requires_confirmation(dirty: bool, soft_locked: bool) -> bool {
+    dirty || soft_locked
+}
 
 pub fn create_note(vault: &mut Vault, modified_at: i64) -> Uuid {
     let id = Uuid::new_v4();

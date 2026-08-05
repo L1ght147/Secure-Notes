@@ -386,6 +386,19 @@ impl VaultService {
         self.save_inner(session, None)
     }
 
+    pub fn save_after_reauthentication(
+        &self,
+        session: &mut VaultSession,
+        password: &str,
+    ) -> Result<(), VaultError> {
+        let existing = self.current_container(session)?;
+        let (_, authenticated_key) = self.codec.decrypt(&existing, password)?;
+        if !constant_time_equal(authenticated_key.expose(), session.data_key.expose()) {
+            return Err(VaultError::InvalidPasswordOrKey);
+        }
+        self.save_inner(session, None)
+    }
+
     pub fn change_password(
         &self,
         session: &mut VaultSession,
@@ -506,6 +519,13 @@ fn fingerprint(bytes: &[u8]) -> Result<[u8; 32], VaultError> {
         return Err(VaultError::CryptoUnavailable);
     }
     Ok(digest)
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && unsafe {
+            sodium::sodium_memcmp(left.as_ptr().cast(), right.as_ptr().cast(), left.len()) == 0
+        }
 }
 
 fn atomic_write(

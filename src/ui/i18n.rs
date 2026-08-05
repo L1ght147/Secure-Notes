@@ -61,6 +61,7 @@ impl Language {
             (Self::English, TextKey::CloseUnsaved) => "Save changes before closing?",
             (Self::English, TextKey::Discard) => "Discard",
             (Self::English, TextKey::SaveCopy) => "Save a copy",
+            (Self::English, TextKey::Retry) => "Retry save",
             (Self::English, TextKey::SoftLockTitle) => "Save needs attention",
             (Self::English, TextKey::SoftLockBody) => {
                 "The window is locked, but unsaved data remains in memory. Enter the password to retry, or discard it."
@@ -106,6 +107,7 @@ impl Language {
             (Self::Russian, TextKey::CloseUnsaved) => "Сохранить изменения перед выходом?",
             (Self::Russian, TextKey::Discard) => "Не сохранять",
             (Self::Russian, TextKey::SaveCopy) => "Сохранить копию",
+            (Self::Russian, TextKey::Retry) => "Повторить сохранение",
             (Self::Russian, TextKey::SoftLockTitle) => "Сохранение требует внимания",
             (Self::Russian, TextKey::SoftLockBody) => {
                 "Окно заблокировано, но несохранённые данные остаются в памяти. Введите пароль для повтора или удалите изменения."
@@ -155,6 +157,7 @@ pub enum TextKey {
     CloseUnsaved,
     Discard,
     SaveCopy,
+    Retry,
     SoftLockTitle,
     SoftLockBody,
     LockedTitle,

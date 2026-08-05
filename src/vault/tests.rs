@@ -212,3 +212,28 @@ fn conflict_can_be_saved_as_an_encrypted_copy() {
         sample_vault()
     );
 }
+
+#[test]
+fn soft_lock_retry_requires_password_before_saving_ram_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.snotes");
+    let service = VaultService::testing();
+    let mut session = service.create(&path, "correct horse").unwrap();
+    session.vault = sample_vault();
+    session.dirty = true;
+
+    assert!(matches!(
+        service.save_after_reauthentication(&mut session, "wrong password"),
+        Err(VaultError::InvalidPasswordOrKey)
+    ));
+    assert!(session.dirty);
+
+    service
+        .save_after_reauthentication(&mut session, "correct horse")
+        .unwrap();
+    assert!(!session.dirty);
+    assert_eq!(
+        service.open(&path, "correct horse").unwrap().vault,
+        sample_vault()
+    );
+}

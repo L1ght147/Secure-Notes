@@ -7,7 +7,7 @@ mod settings;
 use std::{
     path::PathBuf,
     sync::mpsc::Receiver,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use eframe::egui::{self, Color32, RichText};
@@ -20,7 +20,10 @@ use crate::{
 
 use self::{
     i18n::{Language, TextKey},
-    model::{create_note, delete_note, search_notes},
+    model::{
+        AutoLockTimer, close_requires_confirmation, create_note, delete_note,
+        lock_for_session_event, search_notes,
+    },
     settings::AppSettings,
 };
 
@@ -85,6 +88,8 @@ struct SecureNotesApp {
     close_prompt: bool,
     error: Option<VaultError>,
     transient_message: Option<&'static str>,
+    started_at: Instant,
+    auto_lock: AutoLockTimer,
 }
 
 impl SecureNotesApp {
@@ -100,12 +105,14 @@ impl SecureNotesApp {
         let session_events = platform
             .subscribe_session_events()
             .unwrap_or_else(|_| std::sync::mpsc::channel().1);
+        let settings = AppSettings::load();
+        let timeout = Duration::from_secs(u64::from(settings.auto_lock_minutes) * 60);
         Self {
             state: SessionState::Welcome,
             service: VaultService::default(),
             platform,
             session_events,
-            settings: AppSettings::load(),
+            settings,
             pending_vault: None,
             password: String::new(),
             confirm_password: String::new(),
@@ -121,6 +128,8 @@ impl SecureNotesApp {
             close_prompt: false,
             error: None,
             transient_message: None,
+            started_at: Instant::now(),
+            auto_lock: AutoLockTimer::new(timeout),
         }
     }
 
@@ -136,11 +145,12 @@ impl SecureNotesApp {
         }
 
         if ctx.input(|input| input.viewport().close_requested()) {
-            let needs_prompt = match &self.state {
-                SessionState::Unlocked(session) => session.dirty,
-                SessionState::SoftLocked { .. } => true,
-                _ => false,
+            let (dirty, soft_locked) = match &self.state {
+                SessionState::Unlocked(session) => (session.dirty, false),
+                SessionState::SoftLocked { .. } => (false, true),
+                _ => (false, false),
             };
+            let needs_prompt = close_requires_confirmation(dirty, soft_locked);
             if needs_prompt {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.close_prompt = true;
@@ -183,6 +193,55 @@ impl SecureNotesApp {
         self.state = SessionState::Locked {
             path: session.path.clone(),
         };
+    }
+
+    fn retry_soft_locked_save(&mut self) -> bool {
+        let state = std::mem::replace(&mut self.state, SessionState::Welcome);
+        let SessionState::SoftLocked { mut session, .. } = state else {
+            self.state = state;
+            return false;
+        };
+        match self
+            .service
+            .save_after_reauthentication(&mut session, &self.password)
+        {
+            Ok(()) => {
+                self.state = SessionState::Locked {
+                    path: session.path.clone(),
+                };
+                self.error = None;
+                clear_secret(&mut self.password);
+                true
+            }
+            Err(error) => {
+                self.state = SessionState::SoftLocked {
+                    session,
+                    save_error: error.clone(),
+                };
+                self.error = Some(error);
+                clear_secret(&mut self.password);
+                false
+            }
+        }
+    }
+
+    fn save_copy_current(&mut self, path: PathBuf) -> Result<bool, VaultError> {
+        let was_soft_locked = matches!(self.state, SessionState::SoftLocked { .. });
+        match &mut self.state {
+            SessionState::Unlocked(session) | SessionState::SoftLocked { session, .. } => {
+                self.service.save_copy(session, path, &self.copy_password)?;
+            }
+            _ => return Ok(false),
+        }
+        if was_soft_locked {
+            let state = std::mem::replace(&mut self.state, SessionState::Welcome);
+            if let SessionState::SoftLocked { session, .. } = state {
+                self.state = SessionState::Locked {
+                    path: session.path.clone(),
+                };
+            }
+        }
+        Ok(true)
     }
 
     fn render_welcome(&mut self, ui: &mut egui::Ui) {
@@ -543,6 +602,7 @@ impl SecureNotesApp {
         }
         let language = self.language();
         let mut open = self.show_settings;
+        let previous = self.settings.clone();
         egui::Window::new(language.text(TextKey::Settings))
             .open(&mut open)
             .resizable(false)
@@ -577,7 +637,7 @@ impl SecureNotesApp {
                     language.text(TextKey::LockOnWindows),
                 );
             });
-        if self.settings != AppSettings::load() {
+        if self.settings != previous {
             self.settings.save();
         }
         self.show_settings = open;
@@ -693,13 +753,13 @@ impl SecureNotesApp {
                 .add_filter("Secure Notes", &["snotes"])
                 .set_file_name("notes-copy.snotes")
                 .save_file()
-            && let SessionState::Unlocked(session) = &mut self.state
         {
-            match self.service.save_copy(session, path, &self.copy_password) {
-                Ok(()) => {
+            match self.save_copy_current(path) {
+                Ok(true) => {
                     open = false;
                     self.error = None;
                 }
+                Ok(false) => {}
                 Err(error) => self.error = Some(error),
             }
             clear_secret(&mut self.copy_password);
@@ -718,8 +778,28 @@ impl SecureNotesApp {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label(language.text(TextKey::CloseUnsaved));
+                let soft_locked = matches!(self.state, SessionState::SoftLocked { .. });
+                if soft_locked {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.password)
+                            .password(true)
+                            .hint_text(language.text(TextKey::Password))
+                            .desired_width(f32::INFINITY),
+                    );
+                }
                 ui.horizontal(|ui| {
-                    if ui.button(language.text(TextKey::Save)).clicked() && self.save_current() {
+                    let save_clicked = ui
+                        .add_enabled(
+                            !soft_locked || !self.password.is_empty(),
+                            egui::Button::new(language.text(TextKey::Save)),
+                        )
+                        .clicked();
+                    let saved = if soft_locked {
+                        save_clicked && self.retry_soft_locked_save()
+                    } else {
+                        save_clicked && self.save_current()
+                    };
+                    if saved {
                         self.close_prompt = false;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -737,6 +817,9 @@ impl SecureNotesApp {
 
     fn render_soft_locked(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
+        let mut retry = false;
+        let mut discard = false;
+        let mut save_copy = false;
         ui.add_space(90.0);
         ui.vertical_centered(|ui| {
             ui.set_max_width(500.0);
@@ -749,15 +832,38 @@ impl SecureNotesApp {
                 );
             }
             ui.add_space(12.0);
-            if ui.button(language.text(TextKey::Discard)).clicked() {
-                let state = std::mem::replace(&mut self.state, SessionState::Welcome);
-                if let SessionState::SoftLocked { session, .. } = state {
-                    self.state = SessionState::Locked {
-                        path: session.path.clone(),
-                    };
-                }
-            }
+            ui.add(
+                egui::TextEdit::singleline(&mut self.password)
+                    .password(true)
+                    .hint_text(language.text(TextKey::Password))
+                    .desired_width(f32::INFINITY),
+            );
+            ui.horizontal(|ui| {
+                retry = ui
+                    .add_enabled(
+                        !self.password.is_empty(),
+                        egui::Button::new(language.text(TextKey::Retry)),
+                    )
+                    .clicked();
+                save_copy = ui.button(language.text(TextKey::SaveCopy)).clicked();
+                discard = ui.button(language.text(TextKey::Discard)).clicked();
+            });
         });
+        if retry {
+            self.retry_soft_locked_save();
+        }
+        if save_copy {
+            self.show_save_copy = true;
+        }
+        if discard {
+            let state = std::mem::replace(&mut self.state, SessionState::Welcome);
+            if let SessionState::SoftLocked { session, .. } = state {
+                self.state = SessionState::Locked {
+                    path: session.path.clone(),
+                };
+            }
+            clear_secret(&mut self.password);
+        }
     }
 
     fn render_error(&mut self, ui: &mut egui::Ui) {
@@ -790,7 +896,25 @@ impl SecureNotesApp {
 impl eframe::App for SecureNotesApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_shortcuts_and_close(ctx);
-        while self.session_events.try_recv().is_ok() {}
+        let now = self.started_at.elapsed();
+        self.auto_lock.set_timeout(Duration::from_secs(
+            u64::from(self.settings.auto_lock_minutes) * 60,
+        ));
+        if ctx.input(|input| !input.events.is_empty()) {
+            self.auto_lock.record_activity(now);
+        }
+
+        let mut session_lock_requested = false;
+        while let Ok(event) = self.session_events.try_recv() {
+            session_lock_requested |=
+                lock_for_session_event(event, self.settings.lock_on_session_events);
+        }
+        let idle_lock_requested =
+            matches!(self.state, SessionState::Unlocked(_)) && self.auto_lock.expired(now);
+        if session_lock_requested || idle_lock_requested {
+            self.lock_current();
+        }
+        ctx.request_repaint_after(Duration::from_secs(1));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
