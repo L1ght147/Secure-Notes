@@ -1,7 +1,7 @@
 //! Encrypted vault domain and persistence boundary.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     ptr::NonNull,
@@ -13,6 +13,8 @@ use libsodium_sys as sodium;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::platform::{NativePlatformSecurity, PlatformSecurity};
 
 const MAGIC: [u8; 8] = *b"SNOTES\0\0";
 const FORMAT_VERSION: u16 = 1;
@@ -98,7 +100,8 @@ impl SecretBytes {
         let Some(ptr) = NonNull::new(raw) else {
             return Err(VaultError::MemoryLockFailed);
         };
-        if unsafe { sodium::sodium_mlock(raw.cast(), len) } != 0 {
+        let bytes = unsafe { slice::from_raw_parts_mut(raw, len) };
+        if NativePlatformSecurity.lock_memory(bytes).is_err() {
             unsafe { sodium::sodium_free(raw.cast()) };
             return Err(VaultError::MemoryLockFailed);
         }
@@ -130,7 +133,8 @@ impl Drop for SecretBytes {
     fn drop(&mut self) {
         unsafe {
             sodium::sodium_memzero(self.ptr.as_ptr().cast(), self.len);
-            let _ = sodium::sodium_munlock(self.ptr.as_ptr().cast(), self.len);
+            NativePlatformSecurity
+                .unlock_memory(slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len));
             sodium::sodium_free(self.ptr.as_ptr().cast());
         }
     }
@@ -560,13 +564,40 @@ fn inject_fault(actual: Option<FaultPoint>, current: FaultPoint) -> Result<(), V
     }
 }
 
+#[cfg(not(windows))]
 fn replace_file(temporary: &Path, destination: &Path) -> Result<(), VaultError> {
     fs::rename(temporary, destination).map_err(|_| VaultError::WriteFailed)
 }
 
+#[cfg(windows)]
+fn replace_file(temporary: &Path, destination: &Path) -> Result<(), VaultError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        },
+        core::PCWSTR,
+    };
+
+    let temporary: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(temporary.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|_| VaultError::WriteFailed)
+}
+
 #[cfg(unix)]
 fn sync_parent(parent: &Path) -> Result<(), VaultError> {
-    File::open(parent)
+    fs::File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(|_| VaultError::WriteFailed)
 }
