@@ -7,6 +7,14 @@ publish = false
 
 [dependencies]
 eframe = { version = "=0.35.0", default-features = false, features = ["accesskit", "default_fonts", "glow"] }
+libsodium-sys-stable = { version = "=1.24.0", features = ["minimal"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.19"
+uuid = { version = "1.24.0", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"
 
 [profile.release]
 lto = "thin"

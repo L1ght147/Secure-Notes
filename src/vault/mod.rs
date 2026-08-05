@@ -1,1 +1,482 @@
 //! Encrypted vault domain and persistence boundary.
+
+use std::{ptr::NonNull, slice, sync::OnceLock};
+
+use libsodium_sys as sodium;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use uuid::Uuid;
+
+const MAGIC: [u8; 8] = *b"SNOTES\0\0";
+const FORMAT_VERSION: u16 = 1;
+const SCHEMA_VERSION: u16 = 1;
+const DATA_KEY_LEN: usize = sodium::crypto_aead_xchacha20poly1305_ietf_KEYBYTES as usize;
+const NONCE_LEN: usize = sodium::crypto_aead_xchacha20poly1305_ietf_NPUBBYTES as usize;
+const TAG_LEN: usize = sodium::crypto_aead_xchacha20poly1305_ietf_ABYTES as usize;
+const SALT_LEN: usize = sodium::crypto_pwhash_SALTBYTES as usize;
+const WRAPPED_KEY_LEN: usize = DATA_KEY_LEN + TAG_LEN;
+const WRAP_AAD_LEN: usize = 88;
+pub(crate) const WRAPPED_KEY_OFFSET: usize = 88;
+pub(crate) const PAYLOAD_LENGTH_OFFSET: usize = 160;
+pub(crate) const HEADER_LEN: usize = 168;
+pub const PAYLOAD_LIMIT: usize = 100 * 1024 * 1024;
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct Note {
+    pub id: Uuid,
+    pub title: String,
+    pub body: String,
+    pub modified_at: i64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub struct Vault {
+    pub schema_version: u16,
+    pub notes: Vec<Note>,
+}
+
+impl Default for Vault {
+    fn default() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            notes: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum VaultError {
+    #[error("unsupported vault version: {0}")]
+    UnsupportedVersion(u16),
+    #[error("vault payload exceeds the 100 MB limit")]
+    PayloadTooLarge,
+    #[error("incorrect password or damaged key data")]
+    InvalidPasswordOrKey,
+    #[error("vault integrity check failed")]
+    IntegrityViolation,
+    #[error("malformed vault container")]
+    MalformedContainer,
+    #[error("password must contain at least 8 characters")]
+    PasswordTooShort,
+    #[error("secure memory could not be locked; operation aborted")]
+    MemoryLockFailed,
+    #[error("cryptographic subsystem is unavailable")]
+    CryptoUnavailable,
+}
+
+pub fn validate_password(password: &str) -> Result<(), VaultError> {
+    if password.chars().count() < 8 {
+        return Err(VaultError::PasswordTooShort);
+    }
+    Ok(())
+}
+
+/// A guarded allocation that is explicitly locked and wiped before release.
+pub struct SecretBytes {
+    ptr: NonNull<u8>,
+    len: usize,
+}
+
+impl SecretBytes {
+    fn allocate(len: usize) -> Result<Self, VaultError> {
+        ensure_sodium()?;
+        let raw = unsafe { sodium::sodium_malloc(len) }.cast::<u8>();
+        let Some(ptr) = NonNull::new(raw) else {
+            return Err(VaultError::MemoryLockFailed);
+        };
+        if unsafe { sodium::sodium_mlock(raw.cast(), len) } != 0 {
+            unsafe { sodium::sodium_free(raw.cast()) };
+            return Err(VaultError::MemoryLockFailed);
+        }
+        Ok(Self { ptr, len })
+    }
+
+    fn random(len: usize) -> Result<Self, VaultError> {
+        let secret = Self::allocate(len)?;
+        unsafe { sodium::randombytes_buf(secret.ptr.as_ptr().cast(), len) };
+        Ok(secret)
+    }
+
+    fn from_slice(bytes: &[u8]) -> Result<Self, VaultError> {
+        let mut secret = Self::allocate(bytes.len())?;
+        secret.expose_mut().copy_from_slice(bytes);
+        Ok(secret)
+    }
+
+    pub(crate) fn expose(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+
+    fn expose_mut(&mut self) -> &mut [u8] {
+        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        unsafe {
+            sodium::sodium_memzero(self.ptr.as_ptr().cast(), self.len);
+            let _ = sodium::sodium_munlock(self.ptr.as_ptr().cast(), self.len);
+            sodium::sodium_free(self.ptr.as_ptr().cast());
+        }
+    }
+}
+
+unsafe impl Send for SecretBytes {}
+
+#[derive(Clone, Copy)]
+pub(crate) struct KdfProfile {
+    ops_limit: u64,
+    mem_limit: u64,
+}
+
+impl KdfProfile {
+    #[cfg(test)]
+    pub(crate) const fn testing() -> Self {
+        Self {
+            ops_limit: 1,
+            mem_limit: 8 * 1024 * 1024,
+        }
+    }
+}
+
+pub(crate) struct VaultCodec {
+    profile: KdfProfile,
+}
+
+impl VaultCodec {
+    pub(crate) const fn new(profile: KdfProfile) -> Self {
+        Self { profile }
+    }
+
+    pub(crate) fn encrypt_new(
+        &self,
+        vault: &Vault,
+        password: &str,
+    ) -> Result<(Vec<u8>, SecretBytes), VaultError> {
+        validate_password(password)?;
+        validate_schema(vault)?;
+        let data_key = SecretBytes::random(DATA_KEY_LEN)?;
+        let container = self.encrypt(vault, password, &data_key, random_array()?)?;
+        Ok((container, data_key))
+    }
+
+    pub(crate) fn decrypt(
+        &self,
+        container: &[u8],
+        password: &str,
+    ) -> Result<(Vault, SecretBytes), VaultError> {
+        let header = Header::parse(container, self.profile)?;
+        let kek = derive_key(password, &header.salt, self.profile)?;
+        let key_bytes = aead_decrypt(
+            &header.wrapped_key,
+            kek.expose(),
+            &header.wrap_nonce,
+            &container[..WRAP_AAD_LEN],
+        )
+        .map_err(|_| VaultError::InvalidPasswordOrKey)?;
+        let data_key = SecretBytes::from_slice(&key_bytes)?;
+        wipe_vec(key_bytes);
+
+        let ciphertext = &container[HEADER_LEN..];
+        let plaintext = aead_decrypt(
+            ciphertext,
+            data_key.expose(),
+            &header.payload_nonce,
+            &container[..HEADER_LEN],
+        )
+        .map_err(|_| VaultError::IntegrityViolation)?;
+        if plaintext.len() > PAYLOAD_LIMIT {
+            wipe_vec(plaintext);
+            return Err(VaultError::PayloadTooLarge);
+        }
+        let decoded =
+            serde_json::from_slice::<Vault>(&plaintext).map_err(|_| VaultError::IntegrityViolation);
+        wipe_vec(plaintext);
+        let vault = decoded?;
+        validate_schema(&vault)?;
+        Ok((vault, data_key))
+    }
+
+    pub(crate) fn change_password(
+        &self,
+        container: &[u8],
+        data_key: &SecretBytes,
+        new_password: &str,
+    ) -> Result<Vec<u8>, VaultError> {
+        validate_password(new_password)?;
+        let old_header = Header::parse(container, self.profile)?;
+        let plaintext = aead_decrypt(
+            &container[HEADER_LEN..],
+            data_key.expose(),
+            &old_header.payload_nonce,
+            &container[..HEADER_LEN],
+        )
+        .map_err(|_| VaultError::IntegrityViolation)?;
+        let vault =
+            serde_json::from_slice::<Vault>(&plaintext).map_err(|_| VaultError::IntegrityViolation);
+        wipe_vec(plaintext);
+        self.encrypt(&vault?, new_password, data_key, old_header.vault_id)
+    }
+
+    fn encrypt(
+        &self,
+        vault: &Vault,
+        password: &str,
+        data_key: &SecretBytes,
+        vault_id: [u8; 16],
+    ) -> Result<Vec<u8>, VaultError> {
+        validate_schema(vault)?;
+        let plaintext = serde_json::to_vec(vault).map_err(|_| VaultError::IntegrityViolation)?;
+        if plaintext.len() > PAYLOAD_LIMIT {
+            wipe_vec(plaintext);
+            return Err(VaultError::PayloadTooLarge);
+        }
+
+        let salt = random_array()?;
+        let wrap_nonce = random_array()?;
+        let payload_nonce = random_array()?;
+        let kek = derive_key(password, &salt, self.profile)?;
+
+        let mut header = Header {
+            vault_id,
+            salt,
+            ops_limit: self.profile.ops_limit,
+            mem_limit: self.profile.mem_limit,
+            wrap_nonce,
+            wrapped_key: [0; WRAPPED_KEY_LEN],
+            payload_nonce,
+            payload_len: (plaintext.len() + TAG_LEN) as u64,
+        };
+        let partial = header.serialize();
+        let wrapped = aead_encrypt(
+            data_key.expose(),
+            kek.expose(),
+            &header.wrap_nonce,
+            &partial[..WRAP_AAD_LEN],
+        )?;
+        header.wrapped_key.copy_from_slice(&wrapped);
+        let serialized = header.serialize();
+        let encrypted = aead_encrypt(
+            &plaintext,
+            data_key.expose(),
+            &header.payload_nonce,
+            &serialized,
+        );
+        wipe_vec(plaintext);
+        let encrypted = encrypted?;
+
+        let mut container = Vec::with_capacity(HEADER_LEN + encrypted.len());
+        container.extend_from_slice(&serialized);
+        container.extend_from_slice(&encrypted);
+        Ok(container)
+    }
+}
+
+#[derive(Clone)]
+struct Header {
+    vault_id: [u8; 16],
+    salt: [u8; SALT_LEN],
+    ops_limit: u64,
+    mem_limit: u64,
+    wrap_nonce: [u8; NONCE_LEN],
+    wrapped_key: [u8; WRAPPED_KEY_LEN],
+    payload_nonce: [u8; NONCE_LEN],
+    payload_len: u64,
+}
+
+impl Header {
+    fn parse(container: &[u8], expected: KdfProfile) -> Result<Self, VaultError> {
+        if container.len() < HEADER_LEN {
+            return Err(VaultError::MalformedContainer);
+        }
+        if container[..8] != MAGIC {
+            return Err(VaultError::MalformedContainer);
+        }
+        let version = read_u16(container, 8);
+        if version != FORMAT_VERSION {
+            return Err(VaultError::UnsupportedVersion(version));
+        }
+        if read_u16(container, 10) != 0 {
+            return Err(VaultError::MalformedContainer);
+        }
+
+        let ops_limit = read_u64(container, 44);
+        let mem_limit = read_u64(container, 52);
+        let algorithm = u32::from_le_bytes(container[60..64].try_into().unwrap());
+        if ops_limit != expected.ops_limit
+            || mem_limit != expected.mem_limit
+            || algorithm != sodium::crypto_pwhash_ALG_ARGON2ID13
+        {
+            return Err(VaultError::MalformedContainer);
+        }
+        let payload_len = read_u64(container, PAYLOAD_LENGTH_OFFSET);
+        let max_ciphertext = PAYLOAD_LIMIT as u64 + TAG_LEN as u64;
+        if payload_len > max_ciphertext {
+            return Err(VaultError::PayloadTooLarge);
+        }
+        if payload_len < TAG_LEN as u64
+            || usize::try_from(payload_len)
+                .ok()
+                .and_then(|len| HEADER_LEN.checked_add(len))
+                != Some(container.len())
+        {
+            return Err(VaultError::MalformedContainer);
+        }
+
+        Ok(Self {
+            vault_id: container[12..28].try_into().unwrap(),
+            salt: container[28..44].try_into().unwrap(),
+            ops_limit,
+            mem_limit,
+            wrap_nonce: container[64..88].try_into().unwrap(),
+            wrapped_key: container[88..136].try_into().unwrap(),
+            payload_nonce: container[136..160].try_into().unwrap(),
+            payload_len,
+        })
+    }
+
+    fn serialize(&self) -> [u8; HEADER_LEN] {
+        let mut bytes = [0_u8; HEADER_LEN];
+        bytes[..8].copy_from_slice(&MAGIC);
+        bytes[8..10].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes[12..28].copy_from_slice(&self.vault_id);
+        bytes[28..44].copy_from_slice(&self.salt);
+        bytes[44..52].copy_from_slice(&self.ops_limit.to_le_bytes());
+        bytes[52..60].copy_from_slice(&self.mem_limit.to_le_bytes());
+        bytes[60..64].copy_from_slice(&sodium::crypto_pwhash_ALG_ARGON2ID13.to_le_bytes());
+        bytes[64..88].copy_from_slice(&self.wrap_nonce);
+        bytes[88..136].copy_from_slice(&self.wrapped_key);
+        bytes[136..160].copy_from_slice(&self.payload_nonce);
+        bytes[160..168].copy_from_slice(&self.payload_len.to_le_bytes());
+        bytes
+    }
+}
+
+fn validate_schema(vault: &Vault) -> Result<(), VaultError> {
+    if vault.schema_version != SCHEMA_VERSION {
+        return Err(VaultError::UnsupportedVersion(vault.schema_version));
+    }
+    Ok(())
+}
+
+fn ensure_sodium() -> Result<(), VaultError> {
+    static INITIALIZED: OnceLock<bool> = OnceLock::new();
+    if *INITIALIZED.get_or_init(|| unsafe { sodium::sodium_init() >= 0 }) {
+        Ok(())
+    } else {
+        Err(VaultError::CryptoUnavailable)
+    }
+}
+
+fn derive_key(
+    password: &str,
+    salt: &[u8; SALT_LEN],
+    profile: KdfProfile,
+) -> Result<SecretBytes, VaultError> {
+    ensure_sodium()?;
+    let mut key = SecretBytes::allocate(DATA_KEY_LEN)?;
+    let result = unsafe {
+        sodium::crypto_pwhash(
+            key.expose_mut().as_mut_ptr(),
+            DATA_KEY_LEN as u64,
+            password.as_ptr().cast(),
+            password.len() as u64,
+            salt.as_ptr(),
+            profile.ops_limit,
+            profile.mem_limit as usize,
+            sodium::crypto_pwhash_ALG_ARGON2ID13 as i32,
+        )
+    };
+    if result != 0 {
+        return Err(VaultError::CryptoUnavailable);
+    }
+    Ok(key)
+}
+
+fn aead_encrypt(
+    message: &[u8],
+    key: &[u8],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+) -> Result<Vec<u8>, VaultError> {
+    ensure_sodium()?;
+    if key.len() != DATA_KEY_LEN {
+        return Err(VaultError::CryptoUnavailable);
+    }
+    let mut output = vec![0_u8; message.len() + TAG_LEN];
+    let mut output_len = 0_u64;
+    let result = unsafe {
+        sodium::crypto_aead_xchacha20poly1305_ietf_encrypt(
+            output.as_mut_ptr(),
+            &mut output_len,
+            message.as_ptr(),
+            message.len() as u64,
+            aad.as_ptr(),
+            aad.len() as u64,
+            std::ptr::null(),
+            nonce.as_ptr(),
+            key.as_ptr(),
+        )
+    };
+    if result != 0 || output_len as usize != output.len() {
+        wipe_vec(output);
+        return Err(VaultError::CryptoUnavailable);
+    }
+    Ok(output)
+}
+
+fn aead_decrypt(
+    ciphertext: &[u8],
+    key: &[u8],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+) -> Result<Vec<u8>, ()> {
+    if ensure_sodium().is_err() || key.len() != DATA_KEY_LEN || ciphertext.len() < TAG_LEN {
+        return Err(());
+    }
+    let mut output = vec![0_u8; ciphertext.len() - TAG_LEN];
+    let mut output_len = 0_u64;
+    let result = unsafe {
+        sodium::crypto_aead_xchacha20poly1305_ietf_decrypt(
+            output.as_mut_ptr(),
+            &mut output_len,
+            std::ptr::null_mut(),
+            ciphertext.as_ptr(),
+            ciphertext.len() as u64,
+            aad.as_ptr(),
+            aad.len() as u64,
+            nonce.as_ptr(),
+            key.as_ptr(),
+        )
+    };
+    if result != 0 || output_len as usize != output.len() {
+        wipe_vec(output);
+        return Err(());
+    }
+    Ok(output)
+}
+
+fn random_array<const N: usize>() -> Result<[u8; N], VaultError> {
+    ensure_sodium()?;
+    let mut bytes = [0_u8; N];
+    unsafe { sodium::randombytes_buf(bytes.as_mut_ptr().cast(), N) };
+    Ok(bytes)
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn wipe_vec(mut bytes: Vec<u8>) {
+    if !bytes.is_empty() {
+        unsafe { sodium::sodium_memzero(bytes.as_mut_ptr().cast(), bytes.len()) };
+    }
+}
+
+#[cfg(test)]
+mod tests;
