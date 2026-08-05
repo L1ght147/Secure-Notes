@@ -10,6 +10,7 @@ arboard = { version = "3.6.1", default-features = false }
 blake3 = { version = "1.8.2", features = ["pure"] }
 eframe = { version = "=0.35.0", default-features = false, features = ["accesskit", "default_fonts", "glow"] }
 libsodium-sys-stable = { version = "=1.24.0", features = ["minimal"] }
+rfd = "0.15.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.19"
@@ -19,6 +20,7 @@ uuid = { version = "1.24.0", features = ["serde", "v4"] }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Globalization",
     "Win32_Storage_FileSystem",
     "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
