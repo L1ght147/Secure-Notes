@@ -3,6 +3,7 @@
 mod i18n;
 mod model;
 mod settings;
+mod theme;
 
 use std::{
     path::PathBuf,
@@ -24,7 +25,7 @@ use self::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, search_notes,
     },
-    settings::AppSettings,
+    settings::{AppSettings, ThemePreference},
 };
 
 #[cfg(test)]
@@ -94,18 +95,12 @@ struct SecureNotesApp {
 
 impl SecureNotesApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx.set_theme(egui::ThemePreference::System);
-        cc.egui_ctx.all_styles_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-            style.spacing.button_padding = egui::vec2(12.0, 7.0);
-            style.visuals.selection.bg_fill = Color32::from_rgb(20, 128, 126);
-            style.visuals.widgets.active.bg_fill = Color32::from_rgb(18, 111, 110);
-        });
         let platform = NativePlatformSecurity;
         let session_events = platform
             .subscribe_session_events()
             .unwrap_or_else(|_| std::sync::mpsc::channel().1);
         let settings = AppSettings::load();
+        theme::apply(&cc.egui_ctx, settings.theme_preference);
         let timeout = Duration::from_secs(u64::from(settings.auto_lock_minutes) * 60);
         Self {
             state: SessionState::Welcome,
@@ -248,7 +243,8 @@ impl SecureNotesApp {
         self.render_language_picker(ui);
         ui.add_space(70.0);
         ui.vertical_centered(|ui| {
-            ui.set_max_width(560.0);
+            ui.set_max_width(520.0);
+            ui.add_space(46.0);
             ui.heading(
                 RichText::new(self.language().text(TextKey::WelcomeTitle))
                     .size(30.0)
@@ -260,7 +256,7 @@ impl SecureNotesApp {
             ui.horizontal(|ui| {
                 if ui
                     .add_sized(
-                        [170.0, 42.0],
+                        [190.0, 46.0],
                         egui::Button::new(self.language().text(TextKey::NewVault)),
                     )
                     .clicked()
@@ -277,7 +273,7 @@ impl SecureNotesApp {
                 }
                 if ui
                     .add_sized(
-                        [170.0, 42.0],
+                        [190.0, 46.0],
                         egui::Button::new(self.language().text(TextKey::OpenVault)),
                     )
                     .clicked()
@@ -388,9 +384,9 @@ impl SecureNotesApp {
         let mut password_clicked = false;
 
         egui::Panel::top("app-toolbar").show(ui, |ui| {
-            ui.add_space(5.0);
+            ui.add_space(9.0);
             ui.horizontal(|ui| {
-                ui.heading(RichText::new(language.text(TextKey::AppTitle)).size(20.0));
+                ui.heading(RichText::new(language.text(TextKey::AppTitle)).size(21.0));
                 ui.separator();
                 ui.label(
                     session
@@ -420,15 +416,15 @@ impl SecureNotesApp {
                         .clicked();
                 });
             });
-            ui.add_space(5.0);
+            ui.add_space(9.0);
         });
 
         egui::Panel::left("notes-list")
             .resizable(true)
-            .default_size(265.0)
-            .size_range(220.0..=360.0)
+            .default_size(280.0)
+            .size_range(240.0..=380.0)
             .show(ui, |ui| {
-                ui.add_space(8.0);
+                ui.add_space(12.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.search)
                         .hint_text(language.text(TextKey::Search))
@@ -436,7 +432,7 @@ impl SecureNotesApp {
                 );
                 new_clicked = ui
                     .add_sized(
-                        [ui.available_width(), 36.0],
+                        [ui.available_width(), 42.0],
                         egui::Button::new(format!("＋ {}", language.text(TextKey::NewNote))),
                     )
                     .clicked();
@@ -467,7 +463,7 @@ impl SecureNotesApp {
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.add_space(14.0);
+            ui.add_space(30.0);
             let Some(selected) = self.selected_note else {
                 render_empty(ui, language);
                 return;
@@ -481,16 +477,17 @@ impl SecureNotesApp {
                 render_empty(ui, language);
                 return;
             };
+            ui.set_max_width(780.0);
             let title_response = ui.add(
                 egui::TextEdit::singleline(&mut note.title)
                     .hint_text(language.text(TextKey::NoteTitle))
-                    .font(egui::TextStyle::Heading)
+                    .font(egui::TextStyle::Name("editor-title".into()))
                     .desired_width(f32::INFINITY)
                     .frame(egui::Frame::NONE),
             );
             ui.separator();
             let body_response = ui.add_sized(
-                ui.available_size(),
+                [ui.available_width(), ui.available_height()],
                 egui::TextEdit::multiline(&mut note.body)
                     .hint_text(language.text(TextKey::NoteBody))
                     .frame(egui::Frame::NONE),
@@ -623,6 +620,22 @@ impl SecureNotesApp {
                             Language::English.name(),
                         );
                     });
+                ui.add_space(10.0);
+                ui.label(match language {
+                    Language::Russian => "Тема",
+                    Language::English => "Theme",
+                });
+                egui::ComboBox::from_id_salt("settings-theme")
+                    .selected_text(match self.settings.theme_preference {
+                        ThemePreference::System => match language { Language::Russian => "Как в системе", Language::English => "System" },
+                        ThemePreference::Light => match language { Language::Russian => "Светлая", Language::English => "Light" },
+                        ThemePreference::Dark => match language { Language::Russian => "Тёмная", Language::English => "Dark" },
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.settings.theme_preference, ThemePreference::System, match language { Language::Russian => "Как в системе", Language::English => "System" });
+                        ui.selectable_value(&mut self.settings.theme_preference, ThemePreference::Light, match language { Language::Russian => "Светлая", Language::English => "Light" });
+                        ui.selectable_value(&mut self.settings.theme_preference, ThemePreference::Dark, match language { Language::Russian => "Тёмная", Language::English => "Dark" });
+                    });
                 ui.separator();
                 ui.label(language.text(TextKey::AutoLock));
                 ui.horizontal(|ui| {
@@ -639,6 +652,7 @@ impl SecureNotesApp {
             });
         if self.settings != previous {
             self.settings.save();
+            theme::apply(ctx, self.settings.theme_preference);
         }
         self.show_settings = open;
     }
