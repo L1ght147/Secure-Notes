@@ -4,12 +4,21 @@ use serde::{Deserialize, Serialize};
 
 use super::i18n::Language;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
     pub language: Language,
     pub auto_lock_minutes: u32,
     pub lock_on_session_events: bool,
+    pub theme_preference: ThemePreference,
 }
 
 impl Default for AppSettings {
@@ -18,6 +27,7 @@ impl Default for AppSettings {
             language: Language::current_system(),
             auto_lock_minutes: 5,
             lock_on_session_events: true,
+            theme_preference: ThemePreference::System,
         }
     }
 }

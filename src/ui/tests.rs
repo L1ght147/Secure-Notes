@@ -4,7 +4,7 @@ use super::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, rename_note, search_notes,
     },
-    settings::AppSettings,
+    settings::{AppSettings, ThemePreference},
 };
 use crate::platform::SessionEvent;
 use crate::vault::Vault;
@@ -39,6 +39,7 @@ fn settings_persist_only_non_secret_preferences() {
         language: Language::Russian,
         auto_lock_minutes: 12,
         lock_on_session_events: false,
+        theme_preference: ThemePreference::System,
     };
     let json = serde_json::to_string(&settings).unwrap();
 
@@ -50,6 +51,28 @@ fn settings_persist_only_non_secret_preferences() {
     assert!(!json.contains("search"));
     assert!(!json.contains("editor"));
     assert!(!json.contains("password"));
+}
+
+#[test]
+fn legacy_settings_default_to_system_theme_and_persist_theme_choice() {
+    let legacy = r#"{"language":"English","auto_lock_minutes":5,"lock_on_session_events":true}"#;
+    assert_eq!(
+        serde_json::from_str::<AppSettings>(legacy).unwrap().theme_preference,
+        ThemePreference::System
+    );
+
+    let settings = AppSettings {
+        language: Language::English,
+        auto_lock_minutes: 5,
+        lock_on_session_events: true,
+        theme_preference: ThemePreference::Dark,
+    };
+    assert_eq!(
+        serde_json::from_str::<AppSettings>(&serde_json::to_string(&settings).unwrap())
+            .unwrap()
+            .theme_preference,
+        ThemePreference::Dark
+    );
 }
 
 #[test]
