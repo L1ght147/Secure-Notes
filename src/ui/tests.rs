@@ -58,7 +58,9 @@ fn settings_persist_only_non_secret_preferences() {
 fn legacy_settings_default_to_system_theme_and_persist_theme_choice() {
     let legacy = r#"{"language":"English","auto_lock_minutes":5,"lock_on_session_events":true}"#;
     assert_eq!(
-        serde_json::from_str::<AppSettings>(legacy).unwrap().theme_preference,
+        serde_json::from_str::<AppSettings>(legacy)
+            .unwrap()
+            .theme_preference,
         ThemePreference::System
     );
 
