@@ -30,10 +30,6 @@ impl Language {
     pub fn text(self, key: TextKey) -> &'static str {
         match (self, key) {
             (Self::English, TextKey::AppTitle) => "Secure Notes",
-            (Self::English, TextKey::WelcomeTitle) => "Your notes, sealed locally",
-            (Self::English, TextKey::WelcomeBody) => {
-                "Open an encrypted vault or create a new one. There is no password recovery."
-            }
             (Self::English, TextKey::NewVault) => "Create vault",
             (Self::English, TextKey::OpenVault) => "Open vault",
             (Self::English, TextKey::Create) => "Create",
@@ -76,10 +72,6 @@ impl Language {
             (Self::English, TextKey::NewPassword) => "New password",
             (Self::English, TextKey::Change) => "Change",
             (Self::Russian, TextKey::AppTitle) => "Secure Notes",
-            (Self::Russian, TextKey::WelcomeTitle) => "Заметки под локальной защитой",
-            (Self::Russian, TextKey::WelcomeBody) => {
-                "Откройте зашифрованную базу или создайте новую. Восстановления пароля нет."
-            }
             (Self::Russian, TextKey::NewVault) => "Создать базу",
             (Self::Russian, TextKey::OpenVault) => "Открыть базу",
             (Self::Russian, TextKey::Create) => "Создать",
@@ -128,8 +120,6 @@ impl Language {
 #[derive(Clone, Copy)]
 pub enum TextKey {
     AppTitle,
-    WelcomeTitle,
-    WelcomeBody,
     NewVault,
     OpenVault,
     Create,

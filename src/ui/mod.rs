@@ -253,18 +253,10 @@ impl SecureNotesApp {
                     ui.visuals().widgets.noninteractive.bg_stroke.color,
                 ))
                 .corner_radius(egui::CornerRadius::same(16))
-                .inner_margin(egui::Margin::same(34))
+                .inner_margin(egui::Margin::symmetric(34, 20))
                 .show(ui, |ui| {
                     ui.set_min_width(400.0);
                     ui.vertical_centered(|ui| {
-                        ui.heading(
-                            RichText::new(self.language().text(TextKey::WelcomeTitle))
-                                .size(30.0)
-                                .strong(),
-                        );
-                        ui.add_space(8.0);
-                        ui.label(self.language().text(TextKey::WelcomeBody));
-                        ui.add_space(28.0);
                         ui.horizontal(|ui| {
                             if ui
                                 .add_sized(
