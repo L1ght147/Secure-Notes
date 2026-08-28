@@ -941,6 +941,8 @@ impl SecureNotesApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button(language.text(TextKey::Discard)).clicked() {
+                        self.state = SessionState::Welcome;
+                        clear_secret(&mut self.password);
                         self.close_prompt = false;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
