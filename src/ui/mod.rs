@@ -89,6 +89,10 @@ enum PendingVaultKeyboardCommand {
     Cancel,
 }
 
+fn password_enter_submits(has_password: bool, enter_pressed: bool) -> bool {
+    has_password && enter_pressed
+}
+
 fn pending_vault_keyboard_command(
     action: VaultAction,
     has_password: bool,
@@ -97,7 +101,7 @@ fn pending_vault_keyboard_command(
 ) -> PendingVaultKeyboardCommand {
     if escape_pressed {
         PendingVaultKeyboardCommand::Cancel
-    } else if action == VaultAction::Open && has_password && enter_pressed {
+    } else if action == VaultAction::Open && password_enter_submits(has_password, enter_pressed) {
         PendingVaultKeyboardCommand::Submit
     } else {
         PendingVaultKeyboardCommand::None
@@ -699,13 +703,17 @@ impl SecureNotesApp {
                             .hint_text(password_hint)
                             .desired_width(f32::INFINITY),
                     );
-                    if ui
+                    let unlock_requested = ui
                         .add_enabled(
                             !self.password.is_empty(),
                             egui::Button::new(self.language().text(TextKey::Unlock)),
                         )
                         .clicked()
-                    {
+                        || password_enter_submits(
+                            !self.password.is_empty(),
+                            ui.ctx().input(|input| input.key_pressed(egui::Key::Enter)),
+                        );
+                    if unlock_requested {
                         match self.service.open(&path, &self.password) {
                             Ok(session) => {
                                 self.selected_note =

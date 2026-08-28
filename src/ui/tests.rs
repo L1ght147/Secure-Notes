@@ -6,7 +6,7 @@ use super::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, rename_note, search_notes_sorted,
     },
-    pending_vault_keyboard_command,
+    password_enter_submits, pending_vault_keyboard_command,
     settings::{AppSettings, NoteSortOrder, ThemePreference},
     theme,
 };
@@ -34,6 +34,13 @@ fn vault_dialog_keyboard_shortcuts_open_or_cancel_as_expected() {
         pending_vault_keyboard_command(VaultAction::Create, true, true, false),
         PendingVaultKeyboardCommand::None
     );
+}
+
+#[test]
+fn locked_vault_accepts_enter_only_with_a_password() {
+    assert!(password_enter_submits(true, true));
+    assert!(!password_enter_submits(false, true));
+    assert!(!password_enter_submits(true, false));
 }
 
 #[test]
