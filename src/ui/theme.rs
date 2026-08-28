@@ -77,7 +77,7 @@ pub(crate) fn visuals_for(dark: bool) -> Visuals {
     visuals.widgets.hovered.bg_fill = palette.selected;
     visuals.widgets.hovered.bg_stroke.color = palette.border;
     visuals.widgets.active.bg_fill = palette.accent;
-    visuals.widgets.active.fg_stroke.color = palette.canvas;
+    visuals.widgets.active.fg_stroke.color = palette.text;
     visuals.selection.bg_fill = palette.accent;
     visuals.selection.stroke.color = palette.canvas;
     visuals.weak_text_color = Some(palette.muted);

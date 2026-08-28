@@ -105,6 +105,14 @@ fn theme_uses_readable_text_for_noninteractive_widgets() {
         dark.widgets.noninteractive.fg_stroke.color,
         eframe::egui::Color32::from_rgb(245, 245, 245)
     );
+    assert_eq!(
+        light.strong_text_color(),
+        eframe::egui::Color32::from_rgb(18, 18, 18)
+    );
+    assert_eq!(
+        dark.strong_text_color(),
+        eframe::egui::Color32::from_rgb(245, 245, 245)
+    );
 }
 
 #[test]
