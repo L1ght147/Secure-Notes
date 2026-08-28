@@ -681,10 +681,17 @@ impl SecureNotesApp {
 
     fn render_locked(&mut self, ui: &mut egui::Ui, path: PathBuf) {
         let password_hint = self.language().text(TextKey::Password);
+        let locked_rect = ui.available_rect_before_wrap();
         self.render_language_picker(ui);
-        ui.add_space(90.0);
-        ui.vertical_centered(|ui| {
-            ui.set_max_width(400.0);
+        let panel_rect = egui::Rect::from_center_size(
+            locked_rect.center(),
+            egui::vec2(
+                WorkspaceMetrics::LOCKED_PANEL_SIZE[0],
+                WorkspaceMetrics::LOCKED_PANEL_SIZE[1],
+            ),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(panel_rect), |ui| {
+            ui.set_width(WorkspaceMetrics::LOCKED_PANEL_SIZE[0]);
             egui::Frame::new()
                 .fill(ui.visuals().panel_fill)
                 .stroke(egui::Stroke::new(

@@ -27,6 +27,7 @@ impl WorkspaceMetrics {
     pub const SIDEBAR_CONTROL_RIGHT_GUTTER: f32 = 8.0;
     pub const SIDEBAR_FILTER_HEIGHT: f32 = 34.0;
     pub const WELCOME_ACTIONS_SIZE: [f32; 2] = [520.0, 86.0];
+    pub const LOCKED_PANEL_SIZE: [f32; 2] = [400.0, 208.0];
     const EDITOR_GUTTERS: f32 = 64.0;
 
     pub fn for_window_width(window_width: f32) -> Self {
