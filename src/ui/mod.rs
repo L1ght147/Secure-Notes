@@ -82,6 +82,28 @@ enum VaultAction {
     Open,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingVaultKeyboardCommand {
+    None,
+    Submit,
+    Cancel,
+}
+
+fn pending_vault_keyboard_command(
+    action: VaultAction,
+    has_password: bool,
+    enter_pressed: bool,
+    escape_pressed: bool,
+) -> PendingVaultKeyboardCommand {
+    if escape_pressed {
+        PendingVaultKeyboardCommand::Cancel
+    } else if action == VaultAction::Open && has_password && enter_pressed {
+        PendingVaultKeyboardCommand::Submit
+    } else {
+        PendingVaultKeyboardCommand::None
+    }
+}
+
 struct PendingVault {
     action: VaultAction,
     path: PathBuf,
@@ -328,6 +350,12 @@ impl SecureNotesApp {
         };
         let action = pending.action;
         let path = pending.path.clone();
+        let keyboard_command = pending_vault_keyboard_command(
+            action,
+            !self.password.is_empty(),
+            ctx.input(|input| input.key_pressed(egui::Key::Enter)),
+            ctx.input(|input| input.key_pressed(egui::Key::Escape)),
+        );
         let title = match action {
             VaultAction::Create => self.language().text(TextKey::NewVault),
             VaultAction::Open => self.language().text(TextKey::OpenVault),
@@ -364,12 +392,14 @@ impl SecureNotesApp {
                     let submit = ui
                         .add_enabled(!self.password.is_empty(), egui::Button::new(submit_label))
                         .clicked();
-                    if ui.button(self.language().text(TextKey::Cancel)).clicked() {
+                    if ui.button(self.language().text(TextKey::Cancel)).clicked()
+                        || keyboard_command == PendingVaultKeyboardCommand::Cancel
+                    {
                         self.pending_vault = None;
                         clear_secret(&mut self.password);
                         clear_secret(&mut self.confirm_password);
                         self.error = None;
-                    } else if submit {
+                    } else if submit || keyboard_command == PendingVaultKeyboardCommand::Submit {
                         if action == VaultAction::Create && self.password != self.confirm_password {
                             self.error = None;
                             self.transient_message =

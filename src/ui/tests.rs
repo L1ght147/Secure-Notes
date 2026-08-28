@@ -1,11 +1,12 @@
 use super::{
-    error_text,
+    PendingVaultKeyboardCommand, VaultAction, error_text,
     i18n::{Language, TextKey},
     layout::{WorkspaceMetrics, center_window_in_display},
     model::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, rename_note, search_notes_sorted,
     },
+    pending_vault_keyboard_command,
     settings::{AppSettings, NoteSortOrder, ThemePreference},
     theme,
 };
@@ -14,6 +15,26 @@ use crate::vault::VaultError;
 use crate::vault::{Note, Vault};
 use std::time::Duration;
 use uuid::Uuid;
+
+#[test]
+fn vault_dialog_keyboard_shortcuts_open_or_cancel_as_expected() {
+    assert_eq!(
+        pending_vault_keyboard_command(VaultAction::Open, true, true, false),
+        PendingVaultKeyboardCommand::Submit
+    );
+    assert_eq!(
+        pending_vault_keyboard_command(VaultAction::Open, true, true, true),
+        PendingVaultKeyboardCommand::Cancel
+    );
+    assert_eq!(
+        pending_vault_keyboard_command(VaultAction::Open, false, true, false),
+        PendingVaultKeyboardCommand::None
+    );
+    assert_eq!(
+        pending_vault_keyboard_command(VaultAction::Create, true, true, false),
+        PendingVaultKeyboardCommand::None
+    );
+}
 
 #[test]
 fn note_crud_and_search_operate_on_ram_vault() {
