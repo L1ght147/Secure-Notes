@@ -6,6 +6,7 @@ use super::{
         lock_for_session_event, rename_note, search_notes,
     },
     settings::{AppSettings, ThemePreference},
+    theme,
 };
 use crate::platform::SessionEvent;
 use crate::vault::Vault;
@@ -89,6 +90,21 @@ fn workspace_metrics_keep_the_mock_sidebar_and_readable_editor_column() {
     let compact = WorkspaceMetrics::for_window_width(760.0);
     assert_eq!(compact.sidebar_width, 224.0);
     assert!(compact.editor_width >= 420.0);
+}
+
+#[test]
+fn theme_uses_readable_text_for_noninteractive_widgets() {
+    let light = theme::visuals_for(false);
+    let dark = theme::visuals_for(true);
+
+    assert_eq!(
+        light.widgets.noninteractive.fg_stroke.color,
+        eframe::egui::Color32::from_rgb(18, 18, 18)
+    );
+    assert_eq!(
+        dark.widgets.noninteractive.fg_stroke.color,
+        eframe::egui::Color32::from_rgb(245, 245, 245)
+    );
 }
 
 #[test]

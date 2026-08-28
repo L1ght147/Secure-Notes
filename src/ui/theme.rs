@@ -53,11 +53,11 @@ pub fn apply(ctx: &egui::Context, preference: ThemePreference) {
         style
             .text_styles
             .insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
-        style.visuals = calm_visuals(style.visuals.dark_mode);
+        style.visuals = visuals_for(style.visuals.dark_mode);
     });
 }
 
-fn calm_visuals(dark: bool) -> Visuals {
+pub(crate) fn visuals_for(dark: bool) -> Visuals {
     let mut visuals = if dark {
         Visuals::dark()
     } else {
@@ -69,6 +69,9 @@ fn calm_visuals(dark: bool) -> Visuals {
     visuals.faint_bg_color = palette.surface;
     visuals.extreme_bg_color = palette.canvas;
     visuals.override_text_color = Some(palette.text);
+    visuals.widgets.noninteractive.fg_stroke.color = palette.text;
+    visuals.widgets.inactive.fg_stroke.color = palette.text;
+    visuals.widgets.hovered.fg_stroke.color = palette.text;
     visuals.widgets.noninteractive.bg_stroke.color = palette.border;
     visuals.widgets.inactive.bg_stroke.color = palette.border;
     visuals.widgets.hovered.bg_fill = palette.selected;
