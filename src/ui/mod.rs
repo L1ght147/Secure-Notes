@@ -1,6 +1,7 @@
 //! Native application interface.
 
 mod i18n;
+mod layout;
 mod model;
 mod settings;
 mod theme;
@@ -21,6 +22,7 @@ use crate::{
 
 use self::{
     i18n::{Language, TextKey},
+    layout::WorkspaceMetrics,
     model::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, search_notes,
@@ -245,6 +247,14 @@ impl SecureNotesApp {
         ui.vertical_centered(|ui| {
             ui.set_max_width(520.0);
             ui.add_space(46.0);
+            egui::Frame::new()
+                .fill(ui.visuals().panel_fill)
+                .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                .corner_radius(egui::CornerRadius::same(16))
+                .inner_margin(egui::Margin::same(34))
+                .show(ui, |ui| {
+            ui.set_min_width(400.0);
+            ui.vertical_centered(|ui| {
             ui.heading(
                 RichText::new(self.language().text(TextKey::WelcomeTitle))
                     .size(30.0)
@@ -287,6 +297,8 @@ impl SecureNotesApp {
                     });
                     self.error = None;
                 }
+            });
+            });
             });
         });
         self.render_pending_vault(ui.ctx());
@@ -383,48 +395,42 @@ impl SecureNotesApp {
         let mut settings_clicked = false;
         let mut password_clicked = false;
 
-        egui::Panel::top("app-toolbar").show(ui, |ui| {
-            ui.add_space(9.0);
-            ui.horizontal(|ui| {
-                ui.heading(RichText::new(language.text(TextKey::AppTitle)).size(21.0));
-                ui.separator();
-                ui.label(
-                    session
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy(),
-                );
-                ui.separator();
-                let status = if session.dirty {
-                    RichText::new(language.text(TextKey::Modified))
-                        .color(Color32::from_rgb(205, 115, 28))
-                } else {
-                    RichText::new(language.text(TextKey::Saved))
-                        .color(Color32::from_rgb(28, 142, 104))
-                };
-                ui.label(status);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    settings_clicked = ui.button(language.text(TextKey::Settings)).clicked();
-                    password_clicked = ui.button(language.text(TextKey::ChangePassword)).clicked();
-                    lock_clicked = ui.button(language.text(TextKey::Lock)).clicked();
-                    save_clicked = ui
-                        .add_enabled(
-                            session.dirty,
-                            egui::Button::new(language.text(TextKey::Save)),
-                        )
-                        .clicked();
+        let metrics = WorkspaceMetrics::for_window_width(ui.available_width());
+        let selected_title = self
+            .selected_note
+            .and_then(|id| session.vault.notes.iter().find(|note| note.id == id))
+            .map(|note| note.title.trim())
+            .filter(|title| !title.is_empty())
+            .unwrap_or(language.text(TextKey::Untitled));
+        let status = if session.dirty { language.text(TextKey::Modified) } else { language.text(TextKey::Saved) };
+        egui::Panel::top("workspace-toolbar")
+            .exact_size(metrics.toolbar_height)
+            .show(ui, |ui| {
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(selected_title).size(16.0).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("•••", |ui| {
+                            if ui.button(language.text(TextKey::Save)).clicked() { save_clicked = true; ui.close(); }
+                            if ui.button(language.text(TextKey::ChangePassword)).clicked() { password_clicked = true; ui.close(); }
+                            if ui.button(language.text(TextKey::Lock)).clicked() { lock_clicked = true; ui.close(); }
+                        });
+                        settings_clicked = ui.button("⚙").on_hover_text(language.text(TextKey::Settings)).clicked();
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(format!("• {status}")).small().color(if session.dirty { Color32::from_rgb(181, 115, 47) } else { Color32::from_rgb(39, 108, 75) }));
+                    });
                 });
             });
-            ui.add_space(9.0);
-        });
 
-        egui::Panel::left("notes-list")
-            .resizable(true)
-            .default_size(280.0)
-            .size_range(240.0..=380.0)
+        egui::Panel::left("workspace-sidebar")
+            .exact_size(metrics.sidebar_width)
             .show(ui, |ui| {
-                ui.add_space(12.0);
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("✦").size(18.0).color(Color32::from_rgb(39, 108, 75)));
+                    ui.label(RichText::new(language.text(TextKey::AppTitle)).size(16.0).strong());
+                });
+                ui.add_space(20.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.search)
                         .hint_text(language.text(TextKey::Search))
@@ -432,11 +438,16 @@ impl SecureNotesApp {
                 );
                 new_clicked = ui
                     .add_sized(
-                        [ui.available_width(), 42.0],
+                        [ui.available_width(), 38.0],
                         egui::Button::new(format!("＋ {}", language.text(TextKey::NewNote))),
                     )
                     .clicked();
-                ui.separator();
+                ui.add_space(14.0);
+                ui.label(RichText::new(format!("{} · {}", language.text(TextKey::NoteBody).to_uppercase(), session.vault.notes.len()))
+                    .size(10.0)
+                    .strong()
+                    .color(ui.visuals().weak_text_color()));
+                ui.add_space(7.0);
                 let ids = search_notes(&session.vault, &self.search);
                 if ids.is_empty() && !session.vault.notes.is_empty() {
                     ui.weak(language.text(TextKey::NoResults));
@@ -452,18 +463,24 @@ impl SecureNotesApp {
                         } else {
                             note.title.as_str()
                         };
-                        if ui
-                            .selectable_label(self.selected_note == Some(id), title)
-                            .clicked()
-                        {
+                        let selected = self.selected_note == Some(id);
+                        if ui.add_sized(
+                            [ui.available_width(), 52.0],
+                            egui::Button::new(RichText::new(title).size(14.0))
+                                .fill(if selected { Color32::from_rgb(215, 235, 224) } else { Color32::TRANSPARENT })
+                                .stroke(egui::Stroke::NONE),
+                        ).clicked() {
                             self.selected_note = Some(id);
                         }
+                        ui.add_space(3.0);
                     }
                 });
             });
 
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.add_space(30.0);
+                egui::CentralPanel::default().show(ui, |ui| {
+            ui.add_space(58.0);
+            ui.vertical_centered(|ui| {
+            ui.set_max_width(metrics.editor_width);
             let Some(selected) = self.selected_note else {
                 render_empty(ui, language);
                 return;
@@ -477,37 +494,39 @@ impl SecureNotesApp {
                 render_empty(ui, language);
                 return;
             };
-            ui.set_max_width(780.0);
+            ui.label(RichText::new("ЛИЧНОЕ · ЛОКАЛЬНАЯ ЗАМЕТКА")
+                .size(10.0)
+                .strong()
+                .color(ui.visuals().weak_text_color()));
+            ui.add_space(16.0);
             let title_response = ui.add(
                 egui::TextEdit::singleline(&mut note.title)
                     .hint_text(language.text(TextKey::NoteTitle))
-                    .font(egui::TextStyle::Name("editor-title".into()))
+                    .font(egui::FontId::proportional(34.0))
                     .desired_width(f32::INFINITY)
                     .frame(egui::Frame::NONE),
             );
-            ui.separator();
+            ui.add_space(4.0);
+            ui.label(RichText::new(if session.dirty { language.text(TextKey::Modified) } else { language.text(TextKey::Saved) })
+                .size(12.0)
+                .color(ui.visuals().weak_text_color()));
+            ui.add_space(28.0);
             let body_response = ui.add_sized(
-                [ui.available_width(), ui.available_height()],
+                [ui.available_width(), (ui.available_height() - 44.0).max(120.0)],
                 egui::TextEdit::multiline(&mut note.body)
                     .hint_text(language.text(TextKey::NoteBody))
+                    .font(egui::FontId::proportional(16.0))
                     .frame(egui::Frame::NONE),
             );
             if title_response.changed() || body_response.changed() {
                 note.modified_at = unix_timestamp();
                 session.dirty = true;
             }
-            if ui
-                .put(
-                    egui::Rect::from_min_size(
-                        egui::pos2(ui.max_rect().right() - 88.0, ui.max_rect().bottom() - 34.0),
-                        egui::vec2(80.0, 28.0),
-                    ),
-                    egui::Button::new(language.text(TextKey::Delete)),
-                )
-                .clicked()
-            {
+            ui.add_space(8.0);
+            if ui.small_button(language.text(TextKey::Delete)).clicked() {
                 self.delete_confirmation = Some(selected);
             }
+            });
         });
 
         if new_clicked {
@@ -536,6 +555,12 @@ impl SecureNotesApp {
         ui.add_space(90.0);
         ui.vertical_centered(|ui| {
             ui.set_max_width(400.0);
+            egui::Frame::new()
+                .fill(ui.visuals().panel_fill)
+                .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                .corner_radius(egui::CornerRadius::same(16))
+                .inner_margin(egui::Margin::same(30))
+                .show(ui, |ui| {
             ui.heading(self.language().text(TextKey::LockedTitle));
             ui.label(self.language().text(TextKey::LockedBody));
             ui.add_space(14.0);
@@ -563,6 +588,7 @@ impl SecureNotesApp {
                 }
             }
             self.render_error(ui);
+            });
         });
     }
 

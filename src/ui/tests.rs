@@ -1,5 +1,6 @@
 use super::{
     i18n::{Language, TextKey},
+    layout::WorkspaceMetrics,
     model::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, rename_note, search_notes,
@@ -73,6 +74,19 @@ fn legacy_settings_default_to_system_theme_and_persist_theme_choice() {
             .theme_preference,
         ThemePreference::Dark
     );
+}
+
+#[test]
+fn workspace_metrics_keep_the_mock_sidebar_and_readable_editor_column() {
+    let metrics = WorkspaceMetrics::for_window_width(1120.0);
+
+    assert_eq!(metrics.toolbar_height, 68.0);
+    assert_eq!(metrics.sidebar_width, 262.0);
+    assert_eq!(metrics.editor_width, 684.0);
+
+    let compact = WorkspaceMetrics::for_window_width(760.0);
+    assert_eq!(compact.sidebar_width, 224.0);
+    assert!(compact.editor_width >= 420.0);
 }
 
 #[test]
