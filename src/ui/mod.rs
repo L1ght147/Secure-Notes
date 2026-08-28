@@ -469,35 +469,38 @@ impl SecureNotesApp {
                 ui.add_space(20.0);
                 let sidebar_controls_width =
                     WorkspaceMetrics::sidebar_controls_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let sort_width = 74.0;
-                    let search_width =
-                        (sidebar_controls_width - sort_width - ui.spacing().item_spacing.x)
-                            .max(80.0);
-                    ui.add_sized(
-                        [search_width, ui.spacing().interact_size.y],
-                        egui::TextEdit::singleline(&mut self.search)
-                            .hint_text(language.text(TextKey::Search)),
-                    );
-                    egui::ComboBox::from_id_salt("note-sort-order")
-                        .width(sort_width)
-                        .selected_text(self.settings.note_sort_order.short_label(language))
-                        .show_ui(ui, |ui| {
-                            sort_changed |= ui
-                                .selectable_value(
-                                    &mut self.settings.note_sort_order,
-                                    NoteSortOrder::ModifiedNewestFirst,
-                                    NoteSortOrder::ModifiedNewestFirst.label(language),
-                                )
-                                .changed();
-                            sort_changed |= ui
-                                .selectable_value(
-                                    &mut self.settings.note_sort_order,
-                                    NoteSortOrder::TitleAscending,
-                                    NoteSortOrder::TitleAscending.label(language),
-                                )
-                                .changed();
-                        });
+                ui.scope(|ui| {
+                    ui.spacing_mut().interact_size.y = WorkspaceMetrics::SIDEBAR_FILTER_HEIGHT;
+                    ui.horizontal(|ui| {
+                        let sort_width = 74.0;
+                        let search_width =
+                            (sidebar_controls_width - sort_width - ui.spacing().item_spacing.x)
+                                .max(80.0);
+                        ui.add_sized(
+                            [search_width, WorkspaceMetrics::SIDEBAR_FILTER_HEIGHT],
+                            egui::TextEdit::singleline(&mut self.search)
+                                .hint_text(language.text(TextKey::Search)),
+                        );
+                        egui::ComboBox::from_id_salt("note-sort-order")
+                            .width(sort_width)
+                            .selected_text(self.settings.note_sort_order.short_label(language))
+                            .show_ui(ui, |ui| {
+                                sort_changed |= ui
+                                    .selectable_value(
+                                        &mut self.settings.note_sort_order,
+                                        NoteSortOrder::ModifiedNewestFirst,
+                                        NoteSortOrder::ModifiedNewestFirst.label(language),
+                                    )
+                                    .changed();
+                                sort_changed |= ui
+                                    .selectable_value(
+                                        &mut self.settings.note_sort_order,
+                                        NoteSortOrder::TitleAscending,
+                                        NoteSortOrder::TitleAscending.label(language),
+                                    )
+                                    .changed();
+                            });
+                    });
                 });
                 new_clicked = ui
                     .add_sized(

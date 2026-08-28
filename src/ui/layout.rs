@@ -25,6 +25,7 @@ impl WorkspaceMetrics {
     pub const SETTINGS_CLOSE_HITBOX: f32 = 40.0;
     pub const SIDEBAR_RESIZABLE: bool = false;
     pub const SIDEBAR_CONTROL_RIGHT_GUTTER: f32 = 8.0;
+    pub const SIDEBAR_FILTER_HEIGHT: f32 = 34.0;
     pub const WELCOME_ACTIONS_SIZE: [f32; 2] = [520.0, 86.0];
     const EDITOR_GUTTERS: f32 = 64.0;
 

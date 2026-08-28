@@ -147,6 +147,7 @@ fn workspace_metrics_keep_the_mock_sidebar_and_readable_editor_column() {
     assert!(!WorkspaceMetrics::SIDEBAR_RESIZABLE);
     assert_eq!(WorkspaceMetrics::WELCOME_ACTIONS_SIZE, [520.0, 86.0]);
     assert_eq!(WorkspaceMetrics::sidebar_controls_width(278.0), 270.0);
+    assert_eq!(WorkspaceMetrics::SIDEBAR_FILTER_HEIGHT, 34.0);
 
     let compact = WorkspaceMetrics::for_window_width(760.0);
     assert_eq!(compact.sidebar_width, 224.0);
