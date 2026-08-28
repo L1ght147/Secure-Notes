@@ -15,6 +15,9 @@ use std::{
 use eframe::egui::{self, Color32, RichText};
 use uuid::Uuid;
 
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+
 use crate::{
     platform::{NativePlatformSecurity, PlatformSecurity, SessionEvent},
     vault::{VaultError, VaultService, VaultSession},
@@ -22,7 +25,7 @@ use crate::{
 
 use self::{
     i18n::{Language, TextKey},
-    layout::WorkspaceMetrics,
+    layout::{WorkspaceMetrics, center_window_in_display},
     model::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, search_notes,
@@ -46,10 +49,24 @@ pub enum SessionState {
 }
 
 pub fn run() -> eframe::Result {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size(WorkspaceMetrics::INITIAL_WINDOW_SIZE)
+        .with_min_inner_size([760.0, 520.0]);
+    #[cfg(target_os = "windows")]
+    {
+        let display_size = unsafe {
+            [
+                GetSystemMetrics(SM_CXSCREEN) as f32,
+                GetSystemMetrics(SM_CYSCREEN) as f32,
+            ]
+        };
+        viewport = viewport.with_position(center_window_in_display(
+            display_size,
+            WorkspaceMetrics::INITIAL_WINDOW_SIZE,
+        ));
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1120.0, 720.0])
-            .with_min_inner_size([760.0, 520.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

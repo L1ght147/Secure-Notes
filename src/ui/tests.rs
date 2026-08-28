@@ -1,6 +1,6 @@
 use super::{
     i18n::{Language, TextKey},
-    layout::WorkspaceMetrics,
+    layout::{WorkspaceMetrics, center_window_in_display},
     model::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, rename_note, search_notes,
@@ -94,6 +94,14 @@ fn workspace_metrics_keep_the_mock_sidebar_and_readable_editor_column() {
     let compact = WorkspaceMetrics::for_window_width(760.0);
     assert_eq!(compact.sidebar_width, 224.0);
     assert!(compact.editor_width >= 420.0);
+}
+
+#[test]
+fn initial_window_position_is_centered_on_the_display() {
+    assert_eq!(
+        center_window_in_display([1920.0, 1080.0], [1120.0, 720.0]),
+        [400.0, 180.0]
+    );
 }
 
 #[test]

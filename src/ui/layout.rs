@@ -1,5 +1,12 @@
 //! Stable layout measurements for the Calm Workspace shell.
 
+pub fn center_window_in_display(display_size: [f32; 2], window_size: [f32; 2]) -> [f32; 2] {
+    [
+        ((display_size[0] - window_size[0]) / 2.0).max(0.0),
+        ((display_size[1] - window_size[1]) / 2.0).max(0.0),
+    ]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorkspaceMetrics {
     pub toolbar_height: f32,
@@ -10,6 +17,7 @@ pub struct WorkspaceMetrics {
 
 impl WorkspaceMetrics {
     pub const TOOLBAR_HEIGHT: f32 = 68.0;
+    pub const INITIAL_WINDOW_SIZE: [f32; 2] = [1120.0, 720.0];
     pub const SIDEBAR_WIDTH: f32 = 262.0;
     pub const COMPACT_SIDEBAR_WIDTH: f32 = 224.0;
     pub const EDITOR_MAX_WIDTH: f32 = 684.0;
