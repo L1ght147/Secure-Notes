@@ -245,49 +245,56 @@ impl SecureNotesApp {
         ui.vertical_centered(|ui| {
             ui.set_max_width(520.0);
             ui.add_space(46.0);
-            ui.heading(
-                RichText::new(self.language().text(TextKey::WelcomeTitle))
-                    .size(30.0)
-                    .strong(),
-            );
-            ui.add_space(8.0);
-            ui.label(self.language().text(TextKey::WelcomeBody));
-            ui.add_space(28.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .add_sized(
-                        [190.0, 46.0],
-                        egui::Button::new(self.language().text(TextKey::NewVault)),
-                    )
-                    .clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Secure Notes", &["snotes"])
-                        .set_file_name("notes.snotes")
-                        .save_file()
-                {
-                    self.pending_vault = Some(PendingVault {
-                        action: VaultAction::Create,
-                        path,
+            egui::Frame::new()
+                .fill(ui.visuals().panel_fill)
+                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                .corner_radius(egui::CornerRadius::same(16))
+                .inner_margin(egui::Margin::same(32))
+                .show(ui, |ui| {
+                    ui.heading(
+                        RichText::new(self.language().text(TextKey::WelcomeTitle))
+                            .size(30.0)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(self.language().text(TextKey::WelcomeBody));
+                    ui.add_space(28.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_sized(
+                                [190.0, 46.0],
+                                egui::Button::new(self.language().text(TextKey::NewVault)),
+                            )
+                            .clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Secure Notes", &["snotes"])
+                                .set_file_name("notes.snotes")
+                                .save_file()
+                        {
+                            self.pending_vault = Some(PendingVault {
+                                action: VaultAction::Create,
+                                path,
+                            });
+                            self.error = None;
+                        }
+                        if ui
+                            .add_sized(
+                                [190.0, 46.0],
+                                egui::Button::new(self.language().text(TextKey::OpenVault)),
+                            )
+                            .clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Secure Notes", &["snotes"])
+                                .pick_file()
+                        {
+                            self.pending_vault = Some(PendingVault {
+                                action: VaultAction::Open,
+                                path,
+                            });
+                            self.error = None;
+                        }
                     });
-                    self.error = None;
-                }
-                if ui
-                    .add_sized(
-                        [190.0, 46.0],
-                        egui::Button::new(self.language().text(TextKey::OpenVault)),
-                    )
-                    .clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Secure Notes", &["snotes"])
-                        .pick_file()
-                {
-                    self.pending_vault = Some(PendingVault {
-                        action: VaultAction::Open,
-                        path,
-                    });
-                    self.error = None;
-                }
-            });
+                });
         });
         self.render_pending_vault(ui.ctx());
     }
@@ -383,41 +390,53 @@ impl SecureNotesApp {
         let mut settings_clicked = false;
         let mut password_clicked = false;
 
-        egui::Panel::top("app-toolbar").show(ui, |ui| {
-            ui.add_space(9.0);
-            ui.horizontal(|ui| {
-                ui.heading(RichText::new(language.text(TextKey::AppTitle)).size(21.0));
-                ui.separator();
-                ui.label(
-                    session
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy(),
-                );
-                ui.separator();
-                let status = if session.dirty {
-                    RichText::new(language.text(TextKey::Modified))
-                        .color(Color32::from_rgb(205, 115, 28))
-                } else {
-                    RichText::new(language.text(TextKey::Saved))
-                        .color(Color32::from_rgb(28, 142, 104))
-                };
-                ui.label(status);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    settings_clicked = ui.button(language.text(TextKey::Settings)).clicked();
-                    password_clicked = ui.button(language.text(TextKey::ChangePassword)).clicked();
-                    lock_clicked = ui.button(language.text(TextKey::Lock)).clicked();
-                    save_clicked = ui
-                        .add_enabled(
-                            session.dirty,
-                            egui::Button::new(language.text(TextKey::Save)),
-                        )
-                        .clicked();
+        let palette = theme::palette_for(ui.visuals().dark_mode);
+        egui::Panel::top("app-toolbar")
+            .exact_size(64.0)
+            .show(ui, |ui| {
+                ui.add_space(9.0);
+                ui.horizontal(|ui| {
+                    ui.heading(RichText::new(language.text(TextKey::AppTitle)).size(20.0));
+                    ui.label(
+                        session
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy(),
+                    );
+                    let status = if session.dirty {
+                        RichText::new(language.text(TextKey::Modified))
+                            .color(Color32::from_rgb(205, 115, 28))
+                    } else {
+                        RichText::new(language.text(TextKey::Saved))
+                            .color(ui.visuals().weak_text_color())
+                    };
+                    ui.label(status);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("More", |ui| {
+                            settings_clicked =
+                                ui.button(language.text(TextKey::Settings)).clicked();
+                            password_clicked =
+                                ui.button(language.text(TextKey::ChangePassword)).clicked();
+                            if ui.button(language.text(TextKey::Delete)).clicked() {
+                                self.delete_confirmation = self.selected_note;
+                            }
+                        });
+                        lock_clicked = ui.button(language.text(TextKey::Lock)).clicked();
+                        save_clicked = ui
+                            .add_enabled(
+                                session.dirty,
+                                egui::Button::new(
+                                    RichText::new(language.text(TextKey::Save))
+                                        .color(palette.canvas),
+                                )
+                                .fill(palette.accent),
+                            )
+                            .clicked();
+                    });
                 });
+                ui.add_space(9.0);
             });
-            ui.add_space(9.0);
-        });
 
         egui::Panel::left("notes-list")
             .resizable(true)
@@ -495,18 +514,6 @@ impl SecureNotesApp {
             if title_response.changed() || body_response.changed() {
                 note.modified_at = unix_timestamp();
                 session.dirty = true;
-            }
-            if ui
-                .put(
-                    egui::Rect::from_min_size(
-                        egui::pos2(ui.max_rect().right() - 88.0, ui.max_rect().bottom() - 34.0),
-                        egui::vec2(80.0, 28.0),
-                    ),
-                    egui::Button::new(language.text(TextKey::Delete)),
-                )
-                .clicked()
-            {
-                self.delete_confirmation = Some(selected);
             }
         });
 
@@ -627,14 +634,44 @@ impl SecureNotesApp {
                 });
                 egui::ComboBox::from_id_salt("settings-theme")
                     .selected_text(match self.settings.theme_preference {
-                        ThemePreference::System => match language { Language::Russian => "Как в системе", Language::English => "System" },
-                        ThemePreference::Light => match language { Language::Russian => "Светлая", Language::English => "Light" },
-                        ThemePreference::Dark => match language { Language::Russian => "Тёмная", Language::English => "Dark" },
+                        ThemePreference::System => match language {
+                            Language::Russian => "Как в системе",
+                            Language::English => "System",
+                        },
+                        ThemePreference::Light => match language {
+                            Language::Russian => "Светлая",
+                            Language::English => "Light",
+                        },
+                        ThemePreference::Dark => match language {
+                            Language::Russian => "Тёмная",
+                            Language::English => "Dark",
+                        },
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.settings.theme_preference, ThemePreference::System, match language { Language::Russian => "Как в системе", Language::English => "System" });
-                        ui.selectable_value(&mut self.settings.theme_preference, ThemePreference::Light, match language { Language::Russian => "Светлая", Language::English => "Light" });
-                        ui.selectable_value(&mut self.settings.theme_preference, ThemePreference::Dark, match language { Language::Russian => "Тёмная", Language::English => "Dark" });
+                        ui.selectable_value(
+                            &mut self.settings.theme_preference,
+                            ThemePreference::System,
+                            match language {
+                                Language::Russian => "Как в системе",
+                                Language::English => "System",
+                            },
+                        );
+                        ui.selectable_value(
+                            &mut self.settings.theme_preference,
+                            ThemePreference::Light,
+                            match language {
+                                Language::Russian => "Светлая",
+                                Language::English => "Light",
+                            },
+                        );
+                        ui.selectable_value(
+                            &mut self.settings.theme_preference,
+                            ThemePreference::Dark,
+                            match language {
+                                Language::Russian => "Тёмная",
+                                Language::English => "Dark",
+                            },
+                        );
                     });
                 ui.separator();
                 ui.label(language.text(TextKey::AutoLock));

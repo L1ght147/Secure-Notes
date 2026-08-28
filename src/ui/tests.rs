@@ -5,6 +5,7 @@ use super::{
         lock_for_session_event, rename_note, search_notes,
     },
     settings::{AppSettings, ThemePreference},
+    theme,
 };
 use crate::platform::SessionEvent;
 use crate::vault::Vault;
@@ -57,7 +58,9 @@ fn settings_persist_only_non_secret_preferences() {
 fn legacy_settings_default_to_system_theme_and_persist_theme_choice() {
     let legacy = r#"{"language":"English","auto_lock_minutes":5,"lock_on_session_events":true}"#;
     assert_eq!(
-        serde_json::from_str::<AppSettings>(legacy).unwrap().theme_preference,
+        serde_json::from_str::<AppSettings>(legacy)
+            .unwrap()
+            .theme_preference,
         ThemePreference::System
     );
 
@@ -72,6 +75,20 @@ fn legacy_settings_default_to_system_theme_and_persist_theme_choice() {
             .unwrap()
             .theme_preference,
         ThemePreference::Dark
+    );
+}
+
+#[test]
+fn oled_and_light_palettes_use_monochrome_primary_accents() {
+    let dark = theme::palette_for(true);
+    let light = theme::palette_for(false);
+
+    assert_eq!(dark.canvas, eframe::egui::Color32::BLACK);
+    assert_eq!(dark.accent, eframe::egui::Color32::WHITE);
+    assert_eq!(light.accent, eframe::egui::Color32::BLACK);
+    assert_ne!(
+        dark.selected,
+        eframe::egui::Color32::from_rgb(215, 235, 224)
     );
 }
 
