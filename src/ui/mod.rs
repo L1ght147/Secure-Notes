@@ -671,7 +671,7 @@ impl SecureNotesApp {
         let language = self.language();
         let mut open = self.show_settings;
         let previous = self.settings.clone();
-        egui::Window::new(language.text(TextKey::Settings))
+        let window_response = egui::Window::new(language.text(TextKey::Settings))
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
@@ -751,6 +751,29 @@ impl SecureNotesApp {
                     language.text(TextKey::LockOnWindows),
                 );
             });
+        if let Some(window_response) = window_response {
+            let window_rect = window_response.response.rect;
+            let close_response = egui::Area::new(egui::Id::new("settings-close-hitbox"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(
+                    window_rect.right() - WorkspaceMetrics::SETTINGS_CLOSE_HITBOX - 10.0,
+                    window_rect.top() + 8.0,
+                ))
+                .show(ctx, |ui| {
+                    ui.allocate_exact_size(
+                        egui::vec2(
+                            WorkspaceMetrics::SETTINGS_CLOSE_HITBOX,
+                            WorkspaceMetrics::SETTINGS_CLOSE_HITBOX,
+                        ),
+                        egui::Sense::click(),
+                    )
+                    .1
+                })
+                .inner;
+            if close_response.clicked() {
+                open = false;
+            }
+        }
         if self.settings != previous {
             self.settings.save();
             theme::apply(ctx, self.settings.theme_preference);
