@@ -113,6 +113,14 @@ fn theme_uses_readable_text_for_noninteractive_widgets() {
         dark.strong_text_color(),
         eframe::egui::Color32::from_rgb(245, 245, 245)
     );
+    assert_eq!(
+        dark.widgets.open.fg_stroke.color,
+        eframe::egui::Color32::from_rgb(245, 245, 245)
+    );
+    assert_eq!(
+        dark.widgets.open.bg_fill,
+        eframe::egui::Color32::from_rgb(42, 42, 42)
+    );
 }
 
 #[test]
