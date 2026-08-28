@@ -467,10 +467,13 @@ impl SecureNotesApp {
                     );
                 });
                 ui.add_space(20.0);
+                let sidebar_controls_width =
+                    WorkspaceMetrics::sidebar_controls_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let sort_width = 74.0;
                     let search_width =
-                        (ui.available_width() - sort_width - ui.spacing().item_spacing.x).max(80.0);
+                        (sidebar_controls_width - sort_width - ui.spacing().item_spacing.x)
+                            .max(80.0);
                     ui.add_sized(
                         [search_width, ui.spacing().interact_size.y],
                         egui::TextEdit::singleline(&mut self.search)
@@ -498,7 +501,7 @@ impl SecureNotesApp {
                 });
                 new_clicked = ui
                     .add_sized(
-                        [ui.available_width(), 38.0],
+                        [sidebar_controls_width, 38.0],
                         egui::Button::new(
                             RichText::new(format!("+ {}", language.text(TextKey::NewNote)))
                                 .color(palette.canvas),

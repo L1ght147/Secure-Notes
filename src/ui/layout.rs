@@ -24,6 +24,7 @@ impl WorkspaceMetrics {
     pub const EDITOR_TOP_PADDING: f32 = 42.0;
     pub const SETTINGS_CLOSE_HITBOX: f32 = 40.0;
     pub const SIDEBAR_RESIZABLE: bool = false;
+    pub const SIDEBAR_CONTROL_RIGHT_GUTTER: f32 = 8.0;
     pub const WELCOME_ACTIONS_SIZE: [f32; 2] = [520.0, 86.0];
     const EDITOR_GUTTERS: f32 = 64.0;
 
@@ -41,5 +42,9 @@ impl WorkspaceMetrics {
             editor_width,
             editor_top_padding: Self::EDITOR_TOP_PADDING,
         }
+    }
+
+    pub fn sidebar_controls_width(available_width: f32) -> f32 {
+        (available_width - Self::SIDEBAR_CONTROL_RIGHT_GUTTER).max(0.0)
     }
 }
