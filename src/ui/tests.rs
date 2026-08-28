@@ -4,15 +4,16 @@ use super::{
     layout::{WorkspaceMetrics, center_window_in_display},
     model::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
-        lock_for_session_event, rename_note, search_notes,
+        lock_for_session_event, rename_note, search_notes_sorted,
     },
-    settings::{AppSettings, ThemePreference},
+    settings::{AppSettings, NoteSortOrder, ThemePreference},
     theme,
 };
 use crate::platform::SessionEvent;
-use crate::vault::Vault;
 use crate::vault::VaultError;
+use crate::vault::{Note, Vault};
 use std::time::Duration;
+use uuid::Uuid;
 
 #[test]
 fn note_crud_and_search_operate_on_ram_vault() {
@@ -23,8 +24,14 @@ fn note_crud_and_search_operate_on_ram_vault() {
     let second = create_note(&mut vault, 102);
     rename_note(&mut vault, second, "Work", 103).unwrap();
 
-    assert_eq!(search_notes(&vault, "молоко"), vec![first]);
-    assert_eq!(search_notes(&vault, "WORK"), vec![second]);
+    assert_eq!(
+        search_notes_sorted(&vault, "молоко", NoteSortOrder::ModifiedNewestFirst),
+        vec![first]
+    );
+    assert_eq!(
+        search_notes_sorted(&vault, "WORK", NoteSortOrder::ModifiedNewestFirst),
+        vec![second]
+    );
     assert!(delete_note(&mut vault, first));
     assert_eq!(vault.notes.len(), 1);
 }
@@ -38,12 +45,52 @@ fn language_defaults_from_locale_and_switches_immediately() {
 }
 
 #[test]
+fn sorted_search_results_follow_the_selected_order() {
+    let first = Uuid::from_u128(1);
+    let second = Uuid::from_u128(2);
+    let third = Uuid::from_u128(3);
+    let vault = Vault {
+        schema_version: 1,
+        notes: vec![
+            Note {
+                id: first,
+                title: "Zebra".into(),
+                body: "match".into(),
+                modified_at: 20,
+            },
+            Note {
+                id: second,
+                title: "Apple".into(),
+                body: "match".into(),
+                modified_at: 30,
+            },
+            Note {
+                id: third,
+                title: "Apple".into(),
+                body: "match".into(),
+                modified_at: 10,
+            },
+        ],
+    };
+
+    assert_eq!(
+        search_notes_sorted(&vault, "match", NoteSortOrder::ModifiedNewestFirst),
+        vec![second, first, third]
+    );
+    assert_eq!(
+        search_notes_sorted(&vault, "match", NoteSortOrder::TitleAscending),
+        vec![second, third, first]
+    );
+}
+
+#[test]
 fn settings_persist_only_non_secret_preferences() {
     let settings = AppSettings {
         language: Language::Russian,
         auto_lock_minutes: 12,
         lock_on_session_events: false,
         theme_preference: ThemePreference::System,
+        note_sort_order: NoteSortOrder::ModifiedNewestFirst,
     };
     let json = serde_json::to_string(&settings).unwrap();
 
@@ -66,12 +113,19 @@ fn legacy_settings_default_to_system_theme_and_persist_theme_choice() {
             .theme_preference,
         ThemePreference::System
     );
+    assert_eq!(
+        serde_json::from_str::<AppSettings>(legacy)
+            .unwrap()
+            .note_sort_order,
+        NoteSortOrder::ModifiedNewestFirst
+    );
 
     let settings = AppSettings {
         language: Language::English,
         auto_lock_minutes: 5,
         lock_on_session_events: true,
         theme_preference: ThemePreference::Dark,
+        note_sort_order: NoteSortOrder::TitleAscending,
     };
     assert_eq!(
         serde_json::from_str::<AppSettings>(&serde_json::to_string(&settings).unwrap())

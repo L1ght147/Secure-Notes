@@ -12,6 +12,33 @@ pub enum ThemePreference {
     Dark,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoteSortOrder {
+    #[default]
+    ModifiedNewestFirst,
+    TitleAscending,
+}
+
+impl NoteSortOrder {
+    pub fn short_label(self, language: Language) -> &'static str {
+        match (language, self) {
+            (Language::Russian, Self::ModifiedNewestFirst) => "Новые",
+            (Language::Russian, Self::TitleAscending) => "А–Я",
+            (Language::English, Self::ModifiedNewestFirst) => "Newest",
+            (Language::English, Self::TitleAscending) => "A–Z",
+        }
+    }
+
+    pub fn label(self, language: Language) -> &'static str {
+        match (language, self) {
+            (Language::Russian, Self::ModifiedNewestFirst) => "Новые сверху",
+            (Language::Russian, Self::TitleAscending) => "Название А–Я",
+            (Language::English, Self::ModifiedNewestFirst) => "Newest first",
+            (Language::English, Self::TitleAscending) => "Title A–Z",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -19,6 +46,7 @@ pub struct AppSettings {
     pub auto_lock_minutes: u32,
     pub lock_on_session_events: bool,
     pub theme_preference: ThemePreference,
+    pub note_sort_order: NoteSortOrder,
 }
 
 impl Default for AppSettings {
@@ -28,6 +56,7 @@ impl Default for AppSettings {
             auto_lock_minutes: 5,
             lock_on_session_events: true,
             theme_preference: ThemePreference::System,
+            note_sort_order: NoteSortOrder::ModifiedNewestFirst,
         }
     }
 }

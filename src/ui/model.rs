@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 
+use super::settings::NoteSortOrder;
 use crate::platform::SessionEvent;
 use crate::vault::{Note, Vault};
 
@@ -72,16 +73,22 @@ pub fn delete_note(vault: &mut Vault, id: Uuid) -> bool {
     vault.notes.len() != original_len
 }
 
-pub fn search_notes(vault: &Vault, query: &str) -> Vec<Uuid> {
+pub fn search_notes_sorted(vault: &Vault, query: &str, order: NoteSortOrder) -> Vec<Uuid> {
     let query = query.trim().to_lowercase();
-    vault
+    let mut notes: Vec<&Note> = vault
         .notes
         .iter()
-        .filter(|note| {
-            query.is_empty()
-                || note.title.to_lowercase().contains(&query)
-                || note.body.to_lowercase().contains(&query)
-        })
-        .map(|note| note.id)
-        .collect()
+        .filter(|note| note_matches_query(note, &query))
+        .collect();
+    notes.sort_by(|left, right| match order {
+        NoteSortOrder::ModifiedNewestFirst => right.modified_at.cmp(&left.modified_at),
+        NoteSortOrder::TitleAscending => left.title.to_lowercase().cmp(&right.title.to_lowercase()),
+    });
+    notes.into_iter().map(|note| note.id).collect()
+}
+
+fn note_matches_query(note: &Note, query: &str) -> bool {
+    query.is_empty()
+        || note.title.to_lowercase().contains(query)
+        || note.body.to_lowercase().contains(query)
 }

@@ -28,9 +28,9 @@ use self::{
     layout::{WorkspaceMetrics, center_window_in_display},
     model::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
-        lock_for_session_event, search_notes,
+        lock_for_session_event, search_notes_sorted,
     },
-    settings::{AppSettings, ThemePreference},
+    settings::{AppSettings, NoteSortOrder, ThemePreference},
 };
 
 #[cfg(test)]
@@ -413,6 +413,7 @@ impl SecureNotesApp {
         let mut new_clicked = false;
         let mut settings_clicked = false;
         let mut password_clicked = false;
+        let mut sort_changed = false;
 
         let metrics = WorkspaceMetrics::for_window_width(ui.available_width());
         let selected_title = self
@@ -466,11 +467,35 @@ impl SecureNotesApp {
                     );
                 });
                 ui.add_space(20.0);
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.search)
-                        .hint_text(language.text(TextKey::Search))
-                        .desired_width(f32::INFINITY),
-                );
+                ui.horizontal(|ui| {
+                    let sort_width = 74.0;
+                    let search_width =
+                        (ui.available_width() - sort_width - ui.spacing().item_spacing.x).max(80.0);
+                    ui.add_sized(
+                        [search_width, ui.spacing().interact_size.y],
+                        egui::TextEdit::singleline(&mut self.search)
+                            .hint_text(language.text(TextKey::Search)),
+                    );
+                    egui::ComboBox::from_id_salt("note-sort-order")
+                        .width(sort_width)
+                        .selected_text(self.settings.note_sort_order.short_label(language))
+                        .show_ui(ui, |ui| {
+                            sort_changed |= ui
+                                .selectable_value(
+                                    &mut self.settings.note_sort_order,
+                                    NoteSortOrder::ModifiedNewestFirst,
+                                    NoteSortOrder::ModifiedNewestFirst.label(language),
+                                )
+                                .changed();
+                            sort_changed |= ui
+                                .selectable_value(
+                                    &mut self.settings.note_sort_order,
+                                    NoteSortOrder::TitleAscending,
+                                    NoteSortOrder::TitleAscending.label(language),
+                                )
+                                .changed();
+                        });
+                });
                 new_clicked = ui
                     .add_sized(
                         [ui.available_width(), 38.0],
@@ -493,7 +518,11 @@ impl SecureNotesApp {
                     .color(ui.visuals().weak_text_color()),
                 );
                 ui.add_space(7.0);
-                let ids = search_notes(&session.vault, &self.search);
+                let ids = search_notes_sorted(
+                    &session.vault,
+                    &self.search,
+                    self.settings.note_sort_order,
+                );
                 if ids.is_empty() && !session.vault.notes.is_empty() {
                     ui.weak(language.text(TextKey::NoResults));
                 }
@@ -604,6 +633,9 @@ impl SecureNotesApp {
         }
         if password_clicked {
             self.show_change_password = true;
+        }
+        if sort_changed {
+            self.settings.save();
         }
     }
 
