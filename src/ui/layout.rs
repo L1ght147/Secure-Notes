@@ -5,6 +5,7 @@ pub struct WorkspaceMetrics {
     pub toolbar_height: f32,
     pub sidebar_width: f32,
     pub editor_width: f32,
+    pub editor_top_padding: f32,
 }
 
 impl WorkspaceMetrics {
@@ -12,6 +13,7 @@ impl WorkspaceMetrics {
     pub const SIDEBAR_WIDTH: f32 = 262.0;
     pub const COMPACT_SIDEBAR_WIDTH: f32 = 224.0;
     pub const EDITOR_MAX_WIDTH: f32 = 684.0;
+    pub const EDITOR_TOP_PADDING: f32 = 42.0;
     const EDITOR_GUTTERS: f32 = 64.0;
 
     pub fn for_window_width(window_width: f32) -> Self {
@@ -26,6 +28,7 @@ impl WorkspaceMetrics {
             toolbar_height: Self::TOOLBAR_HEIGHT,
             sidebar_width,
             editor_width,
+            editor_top_padding: Self::EDITOR_TOP_PADDING,
         }
     }
 }

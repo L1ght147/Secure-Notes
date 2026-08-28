@@ -513,7 +513,7 @@ impl SecureNotesApp {
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.add_space(58.0);
+            ui.add_space(metrics.editor_top_padding);
             ui.vertical_centered(|ui| {
                 ui.set_max_width(metrics.editor_width);
                 let Some(selected) = self.selected_note else {
@@ -529,13 +529,6 @@ impl SecureNotesApp {
                     render_empty(ui, language);
                     return;
                 };
-                ui.label(
-                    RichText::new("ЛИЧНОЕ · ЛОКАЛЬНАЯ ЗАМЕТКА")
-                        .size(10.0)
-                        .strong()
-                        .color(ui.visuals().weak_text_color()),
-                );
-                ui.add_space(16.0);
                 let title_response = ui.add(
                     egui::TextEdit::singleline(&mut note.title)
                         .hint_text(language.text(TextKey::NoteTitle))
@@ -549,17 +542,7 @@ impl SecureNotesApp {
                                 .inner_margin(egui::Margin::symmetric(14, 12)),
                         ),
                 );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(if session.dirty {
-                        language.text(TextKey::Modified)
-                    } else {
-                        language.text(TextKey::Saved)
-                    })
-                    .size(12.0)
-                    .color(ui.visuals().weak_text_color()),
-                );
-                ui.add_space(28.0);
+                ui.add_space(24.0);
                 let body_response = ui.add_sized(
                     [
                         ui.available_width(),
