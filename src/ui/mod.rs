@@ -439,6 +439,7 @@ impl SecureNotesApp {
 
         egui::Panel::left("workspace-sidebar")
             .exact_size(metrics.sidebar_width)
+            .resizable(WorkspaceMetrics::SIDEBAR_RESIZABLE)
             .show(ui, |ui| {
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
