@@ -417,21 +417,16 @@ impl SecureNotesApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(selected_title).size(16.0).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.menu_button("Menu", |ui| {
-                            if ui.button(language.text(TextKey::Save)).clicked() {
-                                save_clicked = true;
-                                ui.close();
-                            }
-                            if ui.button(language.text(TextKey::ChangePassword)).clicked() {
-                                password_clicked = true;
-                                ui.close();
-                            }
-                            if ui.button(language.text(TextKey::Lock)).clicked() {
-                                lock_clicked = true;
-                                ui.close();
-                            }
-                        });
+                        lock_clicked = ui.button(language.text(TextKey::Lock)).clicked();
+                        password_clicked =
+                            ui.button(language.text(TextKey::ChangePassword)).clicked();
                         settings_clicked = ui.button(language.text(TextKey::Settings)).clicked();
+                        save_clicked = ui
+                            .add_enabled(
+                                session.dirty,
+                                egui::Button::new(language.text(TextKey::Save)),
+                            )
+                            .clicked();
                         ui.add_space(8.0);
                         ui.label(RichText::new(status).small().color(if session.dirty {
                             Color32::from_rgb(181, 115, 47)
