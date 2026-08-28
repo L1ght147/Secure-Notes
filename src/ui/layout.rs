@@ -18,7 +18,7 @@ pub struct WorkspaceMetrics {
 impl WorkspaceMetrics {
     pub const TOOLBAR_HEIGHT: f32 = 68.0;
     pub const INITIAL_WINDOW_SIZE: [f32; 2] = [1120.0, 720.0];
-    pub const SIDEBAR_WIDTH: f32 = 262.0;
+    pub const SIDEBAR_WIDTH: f32 = 286.0;
     pub const COMPACT_SIDEBAR_WIDTH: f32 = 224.0;
     pub const EDITOR_MAX_WIDTH: f32 = 684.0;
     pub const EDITOR_TOP_PADDING: f32 = 42.0;

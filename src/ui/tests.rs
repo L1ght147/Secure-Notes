@@ -140,7 +140,7 @@ fn workspace_metrics_keep_the_mock_sidebar_and_readable_editor_column() {
     let metrics = WorkspaceMetrics::for_window_width(1120.0);
 
     assert_eq!(metrics.toolbar_height, 68.0);
-    assert_eq!(metrics.sidebar_width, 262.0);
+    assert_eq!(metrics.sidebar_width, 286.0);
     assert_eq!(metrics.editor_width, 684.0);
     assert_eq!(metrics.editor_top_padding, 42.0);
     assert_eq!(WorkspaceMetrics::SETTINGS_CLOSE_HITBOX, 40.0);
