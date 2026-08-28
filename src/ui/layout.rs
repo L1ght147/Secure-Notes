@@ -16,6 +16,7 @@ impl WorkspaceMetrics {
     pub const EDITOR_TOP_PADDING: f32 = 42.0;
     pub const SETTINGS_CLOSE_HITBOX: f32 = 40.0;
     pub const SIDEBAR_RESIZABLE: bool = false;
+    pub const WELCOME_ACTIONS_SIZE: [f32; 2] = [520.0, 86.0];
     const EDITOR_GUTTERS: f32 = 64.0;
 
     pub fn for_window_width(window_width: f32) -> Self {

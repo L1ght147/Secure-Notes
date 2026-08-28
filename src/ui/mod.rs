@@ -242,9 +242,16 @@ impl SecureNotesApp {
     }
 
     fn render_welcome(&mut self, ui: &mut egui::Ui) {
+        let welcome_rect = ui.available_rect_before_wrap();
         self.render_language_picker(ui);
-        ui.add_space(36.0);
-        ui.vertical_centered(|ui| {
+        let actions_rect = egui::Rect::from_center_size(
+            welcome_rect.center(),
+            egui::vec2(
+                WorkspaceMetrics::WELCOME_ACTIONS_SIZE[0],
+                WorkspaceMetrics::WELCOME_ACTIONS_SIZE[1],
+            ),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(actions_rect), |ui| {
             ui.set_max_width(520.0);
             egui::Frame::new()
                 .fill(ui.visuals().panel_fill)
