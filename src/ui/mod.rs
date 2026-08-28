@@ -1126,9 +1126,7 @@ fn error_text(language: Language, error: &VaultError) -> &'static str {
         (Language::English, VaultError::PayloadTooLarge) => {
             "The vault is larger than the 100 MB safety limit."
         }
-        (Language::English, VaultError::InvalidPasswordOrKey) => {
-            "Incorrect password or damaged key data."
-        }
+        (Language::English, VaultError::InvalidPasswordOrKey) => "Incorrect password.",
         (Language::English, VaultError::IntegrityViolation) => "The vault integrity check failed.",
         (Language::English, VaultError::MalformedContainer) => {
             "This is not a valid Secure Notes vault."
@@ -1153,9 +1151,7 @@ fn error_text(language: Language, error: &VaultError) -> &'static str {
         (Language::Russian, VaultError::PayloadTooLarge) => {
             "База превышает безопасный лимит 100 МБ."
         }
-        (Language::Russian, VaultError::InvalidPasswordOrKey) => {
-            "Неверный пароль или повреждены данные ключа."
-        }
+        (Language::Russian, VaultError::InvalidPasswordOrKey) => "Неверный пароль.",
         (Language::Russian, VaultError::IntegrityViolation) => {
             "Проверка целостности базы не пройдена."
         }

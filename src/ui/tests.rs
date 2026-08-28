@@ -1,4 +1,5 @@
 use super::{
+    error_text,
     i18n::{Language, TextKey},
     layout::{WorkspaceMetrics, center_window_in_display},
     model::{
@@ -10,6 +11,7 @@ use super::{
 };
 use crate::platform::SessionEvent;
 use crate::vault::Vault;
+use crate::vault::VaultError;
 use std::time::Duration;
 
 #[test]
@@ -101,6 +103,14 @@ fn initial_window_position_is_centered_on_the_display() {
     assert_eq!(
         center_window_in_display([1920.0, 1080.0], [1120.0, 720.0]),
         [400.0, 180.0]
+    );
+}
+
+#[test]
+fn wrong_password_message_does_not_mention_key_damage() {
+    assert_eq!(
+        error_text(Language::Russian, &VaultError::InvalidPasswordOrKey),
+        "Неверный пароль."
     );
 }
 
