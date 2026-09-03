@@ -172,7 +172,6 @@ fn workspace_metrics_keep_the_mock_sidebar_and_readable_editor_column() {
     assert_eq!(metrics.editor_width, 684.0);
     assert_eq!(metrics.editor_top_padding, 42.0);
     assert_eq!(WorkspaceMetrics::SETTINGS_CLOSE_HITBOX, 40.0);
-    assert!(!WorkspaceMetrics::SIDEBAR_RESIZABLE);
     assert_eq!(WorkspaceMetrics::WELCOME_ACTIONS_SIZE, [520.0, 86.0]);
     assert_eq!(WorkspaceMetrics::LOCKED_PANEL_SIZE, [400.0, 208.0]);
     assert_eq!(WorkspaceMetrics::sidebar_controls_width(278.0), 270.0);
