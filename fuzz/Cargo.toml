@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-secure-notes = { path = "..", features = ["fuzzing"] }
+secure-notes = { path = "..", default-features = false, features = ["fuzzing"] }
 
 [[bin]]
 name = "container_parser"

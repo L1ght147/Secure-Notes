@@ -4,6 +4,10 @@ Secure Notes is a portable, offline notes application for Windows 10 and 11
 x64. It stores every note in one encrypted `.snotes` file. The application has
 no network features and doesn't intentionally write note plaintext to disk.
 
+Version 0.1.0 is a prerelease. The application has not received an independent
+security audit. Keep backups and complete the Windows smoke-test checklist
+before relying on a new build for important data.
+
 ## Features
 
 - Create, open, edit, search, rename, and delete notes.
@@ -18,7 +22,9 @@ no network features and doesn't intentionally write note plaintext to disk.
 ## Use the portable release
 
 1. Download `SecureNotes-windows-x64.zip` and `SHA256SUMS` from the same
-   release.
+   [GitHub release](https://github.com/L1ght147/Secure-Notes/releases).
+   Tagged builds are published as prereleases. If no release is listed yet,
+   build from source or use a successful workflow artifact.
 2. Verify the ZIP SHA-256 hash against `SHA256SUMS`.
 3. Extract the ZIP to a writable folder.
 4. Run `SecureNotes.exe`.
@@ -33,16 +39,27 @@ password.
 
 ## Build from source
 
-Install Rust 1.92 or later, then run:
+On Windows, install Rust 1.92 or later with the MSVC toolchain and the Visual
+Studio C++ Build Tools, including the Windows SDK. Then run:
 
 ```text
-cargo test --all-targets
-cargo build --release --target x86_64-pc-windows-msvc
+cargo test --all-targets --all-features --locked
+cargo build --release --locked --target x86_64-pc-windows-msvc
 ```
 
 The pinned `libsodium-sys-stable` crate statically embeds libsodium 1.0.22.
 The Windows target enables the static C runtime for a portable executable.
 eframe persistence is disabled.
+
+CI runs formatting, strict Clippy, and tests on Windows and macOS for pushes
+and pull requests. A separate job checks dependencies against RustSec.
+Parser fuzzing runs without desktop dependencies on Linux. To build only the
+vault and platform library, run `cargo check --no-default-features --lib`.
+
+A tag such as `v0.1.0` triggers Windows packaging and publishes the ZIP and
+`SHA256SUMS` to a GitHub prerelease. A manual packaging run only uploads an
+Actions artifact. Run the [Windows smoke test](docs/windows-smoke-test.md)
+on the packaged executable before marking a release stable.
 
 ## Security documentation
 

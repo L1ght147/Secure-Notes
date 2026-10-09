@@ -20,12 +20,12 @@ use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_
 
 use crate::{
     platform::{NativePlatformSecurity, PlatformSecurity, SessionEvent},
-    vault::{VaultError, VaultService, VaultSession},
+    vault::{VaultError, VaultService, VaultSession, clear_secret},
 };
 
 use self::{
     i18n::{Language, TextKey},
-    layout::{WorkspaceMetrics, center_window_in_display},
+    layout::WorkspaceMetrics,
     model::{
         AutoLockTimer, close_requires_confirmation, create_note, delete_note,
         lock_for_session_event, search_notes_sorted,
@@ -49,22 +49,22 @@ pub enum SessionState {
 }
 
 pub fn run() -> eframe::Result {
-    let mut viewport = egui::ViewportBuilder::default()
+    let viewport = egui::ViewportBuilder::default()
         .with_inner_size(WorkspaceMetrics::INITIAL_WINDOW_SIZE)
         .with_min_inner_size([760.0, 520.0]);
     #[cfg(target_os = "windows")]
-    {
+    let viewport = {
         let display_size = unsafe {
             [
                 GetSystemMetrics(SM_CXSCREEN) as f32,
                 GetSystemMetrics(SM_CYSCREEN) as f32,
             ]
         };
-        viewport = viewport.with_position(center_window_in_display(
+        viewport.with_position(layout::center_window_in_display(
             display_size,
             WorkspaceMetrics::INITIAL_WINDOW_SIZE,
-        ));
-    }
+        ))
+    };
     let options = eframe::NativeOptions {
         viewport,
         ..Default::default()
@@ -114,10 +114,12 @@ struct PendingVault {
 }
 
 struct SecureNotesApp {
+    egui_ctx: egui::Context,
     state: SessionState,
     service: VaultService,
     platform: NativePlatformSecurity,
     session_events: Receiver<SessionEvent>,
+    session_monitor_available: bool,
     settings: AppSettings,
     pending_vault: Option<PendingVault>,
     password: String,
@@ -141,17 +143,19 @@ struct SecureNotesApp {
 impl SecureNotesApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let platform = NativePlatformSecurity;
-        let session_events = platform
-            .subscribe_session_events()
-            .unwrap_or_else(|_| std::sync::mpsc::channel().1);
+        let subscription = platform.subscribe_session_events();
+        let session_monitor_available = cfg!(windows) && subscription.is_ok();
+        let session_events = subscription.unwrap_or_else(|_| std::sync::mpsc::channel().1);
         let settings = AppSettings::load();
         theme::apply(&cc.egui_ctx, settings.theme_preference);
         let timeout = Duration::from_secs(u64::from(settings.auto_lock_minutes) * 60);
         Self {
+            egui_ctx: cc.egui_ctx.clone(),
             state: SessionState::Welcome,
             service: VaultService::default(),
             platform,
             session_events,
+            session_monitor_available,
             settings,
             pending_vault: None,
             password: String::new(),
@@ -221,6 +225,7 @@ impl SecureNotesApp {
             self.state = state;
             return;
         };
+        self.clear_sensitive_ui();
         if session.dirty
             && let Err(save_error) = self.service.save(&mut session)
         {
@@ -249,8 +254,7 @@ impl SecureNotesApp {
                 self.state = SessionState::Locked {
                     path: session.path.clone(),
                 };
-                self.error = None;
-                clear_secret(&mut self.password);
+                self.clear_sensitive_ui();
                 true
             }
             Err(error) => {
@@ -260,6 +264,7 @@ impl SecureNotesApp {
                 };
                 self.error = Some(error);
                 clear_secret(&mut self.password);
+                self.clear_text_history();
                 false
             }
         }
@@ -267,12 +272,24 @@ impl SecureNotesApp {
 
     fn save_copy_current(&mut self, path: PathBuf) -> Result<bool, VaultError> {
         let was_soft_locked = matches!(self.state, SessionState::SoftLocked { .. });
-        match &mut self.state {
-            SessionState::Unlocked(session) | SessionState::SoftLocked { session, .. } => {
-                self.service.save_copy(session, path, &self.copy_password)?;
+        let result = match &mut self.state {
+            SessionState::Unlocked(session) => {
+                self.service.save_copy(session, path, &self.copy_password)
+            }
+            SessionState::SoftLocked { session, .. } => {
+                self.service.save_copy_after_reauthentication(
+                    session,
+                    path,
+                    &self.password,
+                    &self.copy_password,
+                )
             }
             _ => return Ok(false),
-        }
+        };
+        clear_secret(&mut self.password);
+        clear_secret(&mut self.copy_password);
+        self.clear_text_history();
+        result?;
         if was_soft_locked {
             let state = std::mem::replace(&mut self.state, SessionState::Welcome);
             if let SessionState::SoftLocked { session, .. } = state {
@@ -282,6 +299,33 @@ impl SecureNotesApp {
             }
         }
         Ok(true)
+    }
+
+    fn clear_text_history(&self) {
+        self.egui_ctx
+            .data_mut(|data| data.remove_by_type::<egui::text_edit::TextEditState>());
+    }
+
+    fn clear_sensitive_ui(&mut self) {
+        for field in [
+            &mut self.password,
+            &mut self.confirm_password,
+            &mut self.new_password,
+            &mut self.confirm_new_password,
+            &mut self.copy_password,
+            &mut self.search,
+        ] {
+            clear_secret(field);
+        }
+        self.selected_note = None;
+        self.delete_confirmation = None;
+        self.pending_vault = None;
+        self.show_change_password = false;
+        self.show_save_copy = false;
+        self.close_prompt = false;
+        self.error = None;
+        self.transient_message = None;
+        self.clear_text_history();
     }
 
     fn render_welcome(&mut self, ui: &mut egui::Ui) {
@@ -402,12 +446,16 @@ impl SecureNotesApp {
                         self.pending_vault = None;
                         clear_secret(&mut self.password);
                         clear_secret(&mut self.confirm_password);
+                        self.clear_text_history();
                         self.error = None;
                     } else if submit || keyboard_command == PendingVaultKeyboardCommand::Submit {
                         if action == VaultAction::Create && self.password != self.confirm_password {
                             self.error = None;
                             self.transient_message =
                                 Some(self.language().text(TextKey::PasswordMismatch));
+                            clear_secret(&mut self.password);
+                            clear_secret(&mut self.confirm_password);
+                            self.clear_text_history();
                             return;
                         }
                         let result = match action {
@@ -419,6 +467,7 @@ impl SecureNotesApp {
                                 self.selected_note =
                                     session.vault.notes.first().map(|note| note.id);
                                 self.state = SessionState::Unlocked(session);
+                                self.auto_lock.record_activity(self.started_at.elapsed());
                                 self.pending_vault = None;
                                 self.error = None;
                                 self.transient_message = None;
@@ -427,6 +476,9 @@ impl SecureNotesApp {
                             }
                             Err(error) => self.error = Some(error),
                         }
+                        clear_secret(&mut self.password);
+                        clear_secret(&mut self.confirm_password);
+                        self.clear_text_history();
                     }
                 });
             });
@@ -617,6 +669,7 @@ impl SecureNotesApp {
                 };
                 let title_response = ui.add(
                     egui::TextEdit::singleline(&mut note.title)
+                        .id_salt(("note-title", &session.path, note.id))
                         .hint_text(language.text(TextKey::NoteTitle))
                         .font(egui::FontId::proportional(34.0))
                         .desired_width(f32::INFINITY)
@@ -635,6 +688,7 @@ impl SecureNotesApp {
                         (ui.available_height() - 44.0).max(120.0),
                     ],
                     egui::TextEdit::multiline(&mut note.body)
+                        .id_salt(("note-body", &session.path, note.id))
                         .hint_text(language.text(TextKey::NoteBody))
                         .font(egui::FontId::proportional(16.0))
                         .frame(
@@ -726,11 +780,14 @@ impl SecureNotesApp {
                                 self.selected_note =
                                     session.vault.notes.first().map(|note| note.id);
                                 self.state = SessionState::Unlocked(session);
+                                self.auto_lock.record_activity(self.started_at.elapsed());
                                 self.error = None;
                                 clear_secret(&mut self.password);
                             }
                             Err(error) => self.error = Some(error),
                         }
+                        clear_secret(&mut self.password);
+                        self.clear_text_history();
                     }
                     self.render_error(ui);
                 });
@@ -881,6 +938,30 @@ impl SecureNotesApp {
         self.show_settings = open;
     }
 
+    fn change_password_current(&mut self) -> bool {
+        let changed = if self.new_password != self.confirm_new_password {
+            self.transient_message = Some(self.language().text(TextKey::PasswordMismatch));
+            false
+        } else if let SessionState::Unlocked(session) = &mut self.state {
+            match self.service.change_password(session, &self.new_password) {
+                Ok(()) => {
+                    self.error = None;
+                    true
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        clear_secret(&mut self.new_password);
+        clear_secret(&mut self.confirm_new_password);
+        self.clear_text_history();
+        changed
+    }
+
     fn render_change_password(&mut self, ctx: &egui::Context) {
         if !self.show_change_password {
             return;
@@ -914,20 +995,13 @@ impl SecureNotesApp {
                     )
                     .clicked();
             });
-        if submit {
-            if self.new_password != self.confirm_new_password {
-                self.transient_message = Some(language.text(TextKey::PasswordMismatch));
-            } else if let SessionState::Unlocked(session) = &mut self.state {
-                match self.service.change_password(session, &self.new_password) {
-                    Ok(()) => {
-                        open = false;
-                        self.error = None;
-                    }
-                    Err(error) => self.error = Some(error),
-                }
-            }
+        if submit && self.change_password_current() {
+            open = false;
+        }
+        if !open {
             clear_secret(&mut self.new_password);
             clear_secret(&mut self.confirm_new_password);
+            self.clear_text_history();
         }
         self.show_change_password = open;
     }
@@ -973,7 +1047,15 @@ impl SecureNotesApp {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.set_min_width(380.0);
-                ui.label(language.text(TextKey::Password));
+                if matches!(self.state, SessionState::SoftLocked { .. }) {
+                    ui.label(language.text(TextKey::Password));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.password)
+                            .password(true)
+                            .desired_width(f32::INFINITY),
+                    );
+                }
+                ui.label(language.text(TextKey::NewPassword));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.copy_password)
                         .password(true)
@@ -981,7 +1063,9 @@ impl SecureNotesApp {
                 );
                 choose = ui
                     .add_enabled(
-                        !self.copy_password.is_empty(),
+                        !self.copy_password.is_empty()
+                            && (!matches!(self.state, SessionState::SoftLocked { .. })
+                                || !self.password.is_empty()),
                         egui::Button::new(language.text(TextKey::SaveCopy)),
                     )
                     .clicked();
@@ -1001,6 +1085,11 @@ impl SecureNotesApp {
                 Err(error) => self.error = Some(error),
             }
             clear_secret(&mut self.copy_password);
+        }
+        if choose || !open {
+            clear_secret(&mut self.copy_password);
+            clear_secret(&mut self.password);
+            self.clear_text_history();
         }
         self.show_save_copy = open;
     }
@@ -1048,6 +1137,8 @@ impl SecureNotesApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button(language.text(TextKey::Cancel)).clicked() {
+                        clear_secret(&mut self.password);
+                        self.clear_text_history();
                         self.close_prompt = false;
                     }
                 });
@@ -1102,7 +1193,7 @@ impl SecureNotesApp {
                     path: session.path.clone(),
                 };
             }
-            clear_secret(&mut self.password);
+            self.clear_sensitive_ui();
         }
     }
 
@@ -1133,6 +1224,12 @@ impl SecureNotesApp {
     }
 }
 
+impl Drop for SecureNotesApp {
+    fn drop(&mut self) {
+        self.clear_sensitive_ui();
+    }
+}
+
 impl eframe::App for SecureNotesApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_shortcuts_and_close(ctx);
@@ -1145,9 +1242,18 @@ impl eframe::App for SecureNotesApp {
         }
 
         let mut session_lock_requested = false;
-        while let Ok(event) = self.session_events.try_recv() {
-            session_lock_requested |=
-                lock_for_session_event(event, self.settings.lock_on_session_events);
+        loop {
+            match self.session_events.try_recv() {
+                Ok(event) => {
+                    session_lock_requested |=
+                        lock_for_session_event(event, self.settings.lock_on_session_events)
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.session_monitor_available = false;
+                    break;
+                }
+            }
         }
         let idle_lock_requested =
             matches!(self.state, SessionState::Unlocked(_)) && self.auto_lock.expired(now);
@@ -1158,6 +1264,16 @@ impl eframe::App for SecureNotesApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if cfg!(windows) && self.settings.lock_on_session_events && !self.session_monitor_available
+        {
+            egui::Panel::top("session-monitor-warning").show(ui, |ui| {
+                let warning = match self.language() {
+                    Language::Russian => "Не удалось отслеживать блокировку и сон Windows. Блокируйте базу вручную; таймер бездействия работает.",
+                    Language::English => "Windows lock/sleep monitoring is unavailable. Lock manually; the inactivity timer remains active.",
+                };
+                ui.colored_label(Color32::from_rgb(205, 80, 65), warning);
+            });
+        }
         let locked_path = match &self.state {
             SessionState::Locked { path } => Some(path.clone()),
             _ => None,
@@ -1169,9 +1285,16 @@ impl eframe::App for SecureNotesApp {
             SessionState::SoftLocked { .. } => self.render_soft_locked(ui),
         }
         self.render_settings_window(ui.ctx());
-        self.render_change_password(ui.ctx());
-        self.render_delete_confirmation(ui.ctx());
-        self.render_save_copy(ui.ctx());
+        if matches!(self.state, SessionState::Unlocked(_)) {
+            self.render_change_password(ui.ctx());
+            self.render_delete_confirmation(ui.ctx());
+        }
+        if matches!(
+            self.state,
+            SessionState::Unlocked(_) | SessionState::SoftLocked { .. }
+        ) {
+            self.render_save_copy(ui.ctx());
+        }
         self.render_close_prompt(ui.ctx());
         self.monitor_copy_commands(ui.ctx());
     }
@@ -1190,15 +1313,6 @@ fn unix_timestamp() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
-}
-
-fn clear_secret(secret: &mut String) {
-    if !secret.is_empty() {
-        unsafe {
-            libsodium_sys::sodium_memzero(secret.as_mut_ptr().cast(), secret.len());
-        }
-    }
-    secret.clear();
 }
 
 fn error_text(language: Language, error: &VaultError) -> &'static str {

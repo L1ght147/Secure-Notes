@@ -27,17 +27,31 @@ installation.
 9. Trigger the inactivity timeout, Windows lock, and sleep. Confirm each dirty
    session saves before locking.
 10. Make the vault folder read-only before a lock. Confirm soft-lock hides the
-    notes and offers retry, encrypted copy, and discard.
+    notes and offers retry, encrypted copy, and discard. Confirm a copy requires
+    the original password: an empty or wrong password must not create a file.
+    Delete the original vault, then save a copy using its original password and
+    a new password. Open that copy and check the unsaved changes are present.
+    Confirm a one-character new password is rejected.
 11. Copy note text. Replace the clipboard from another application before 30
     seconds and confirm Secure Notes preserves it. Repeat without replacement
     and confirm the clipboard clears.
 12. Change or delete the vault from another process. Confirm Save refuses to
     overwrite it and offers an encrypted copy.
+13. Open the same vault in two Secure Notes processes. Save in the first, then
+    confirm the second refuses to overwrite that save.
+14. Open the password-change dialog, type a password, and lock the vault. Confirm
+    the dialog disappears. Unlock and confirm the dialog fields are empty.
+15. Type a unique note fragment, lock and unlock, create a different note, and
+    press Ctrl+Z. Confirm no text from the previous note appears.
+16. Copy a note and exit before 30 seconds. Confirm the documented limitation:
+    the application cannot clear the clipboard after exiting; clear it manually.
 
 ## Check portable behavior
 
 1. Confirm `secure-notes-settings.json` appears beside the executable.
 2. Confirm no Secure Notes directory or file appears in AppData.
-3. Search all files created during the test for known note fragments.
-4. Restart the VM and reopen the vault.
-5. Confirm the executable runs without installing a runtime or service.
+3. Confirm an empty `.<vault-name>.lock` sidecar is present and contains no text.
+   Don't delete this file while a Secure Notes process is using the vault.
+4. Search all files created during the test for known note fragments.
+5. Restart the VM and reopen the vault.
+6. Confirm the executable runs without installing a runtime or service.

@@ -319,3 +319,101 @@ fn create_mode_atomic_write_never_replaces_an_existing_file() {
     ));
     assert_eq!(fs::read(path).unwrap(), b"original");
 }
+
+#[test]
+fn encrypted_copy_rejects_short_password_without_creating_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = VaultService::testing();
+    let mut session = service
+        .create(directory.path().join("vault.snotes"), "original password")
+        .unwrap();
+    let copy = directory.path().join("copy.snotes");
+    assert_eq!(
+        service.save_copy(&mut session, &copy, "x"),
+        Err(VaultError::PasswordTooShort)
+    );
+    assert!(!copy.exists());
+}
+
+#[test]
+fn save_refuses_while_another_writer_holds_the_vault_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("vault.snotes");
+    let service = VaultService::testing();
+    let mut session = service.create(&path, "original password").unwrap();
+    let before = fs::read(&path).unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.path().join(".vault.snotes.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    session.vault = sample_vault();
+    session.dirty = true;
+    assert_eq!(service.save(&mut session), Err(VaultError::FileConflict));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(session.dirty);
+}
+
+#[test]
+fn reauthentication_tracks_password_changes_and_copies() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = VaultService::testing();
+    let mut session = service
+        .create(directory.path().join("vault.snotes"), "original password")
+        .unwrap();
+    service
+        .change_password(&mut session, "replacement password")
+        .unwrap();
+    assert_eq!(
+        service.authenticate_session(&session, "original password"),
+        Err(VaultError::InvalidPasswordOrKey)
+    );
+    service
+        .authenticate_session(&session, "replacement password")
+        .unwrap();
+    service
+        .save_copy_after_reauthentication(
+            &mut session,
+            directory.path().join("copy.snotes"),
+            "replacement password",
+            "copy password",
+        )
+        .unwrap();
+    assert_eq!(
+        service.authenticate_session(&session, "replacement password"),
+        Err(VaultError::InvalidPasswordOrKey)
+    );
+    service
+        .authenticate_session(&session, "copy password")
+        .unwrap();
+}
+
+#[test]
+fn replacement_rechecks_fingerprint_and_preserves_external_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("vault.snotes");
+    fs::write(&path, b"original").unwrap();
+    let expected = super::fingerprint(b"original").unwrap();
+    fs::write(&path, b"external update").unwrap();
+    assert_eq!(
+        super::atomic_write_checked(&path, b"replacement", None, true, Some(expected)),
+        Err(VaultError::FileConflict)
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"external update");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn clearing_a_secret_also_wipes_previously_truncated_bytes() {
+    let mut secret = String::from("secret previously truncated suffix");
+    let initialized_len = secret.len();
+    secret.truncate(6);
+    super::clear_secret(&mut secret);
+    assert!(secret.is_empty());
+    // The String still owns the allocation; all these bytes were initialized.
+    let bytes = unsafe { std::slice::from_raw_parts(secret.as_ptr(), initialized_len) };
+    assert!(bytes.iter().all(|byte| *byte == 0));
+}

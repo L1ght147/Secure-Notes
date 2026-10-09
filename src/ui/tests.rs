@@ -255,3 +255,182 @@ fn close_confirmation_is_required_for_dirty_and_soft_locked_sessions() {
     assert!(close_requires_confirmation(true, false));
     assert!(close_requires_confirmation(false, true));
 }
+
+fn app_with_session(session: crate::vault::VaultSession) -> super::SecureNotesApp {
+    super::SecureNotesApp {
+        egui_ctx: eframe::egui::Context::default(),
+        session_monitor_available: false,
+        state: super::SessionState::Unlocked(session),
+        service: crate::vault::VaultService::testing(),
+        platform: crate::platform::NativePlatformSecurity,
+        session_events: std::sync::mpsc::channel().1,
+        settings: AppSettings::default(),
+        pending_vault: None,
+        password: String::new(),
+        confirm_password: String::new(),
+        new_password: String::new(),
+        confirm_new_password: String::new(),
+        copy_password: String::new(),
+        search: String::new(),
+        selected_note: None,
+        delete_confirmation: None,
+        show_settings: false,
+        show_change_password: false,
+        show_save_copy: false,
+        close_prompt: false,
+        error: None,
+        transient_message: None,
+        started_at: std::time::Instant::now(),
+        auto_lock: AutoLockTimer::new(Duration::from_secs(300)),
+    }
+}
+
+#[test]
+fn soft_locked_copy_rejects_an_unrelated_password() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("vault.snotes");
+    let service = crate::vault::VaultService::testing();
+    let mut session = service.create(&path, "original password").unwrap();
+    session.vault.notes.push(Note {
+        id: Uuid::new_v4(),
+        title: "private".into(),
+        body: "secret body".into(),
+        modified_at: 0,
+    });
+    session.dirty = true;
+    let mut app = app_with_session(session);
+    std::fs::remove_file(&path).unwrap();
+    app.lock_current();
+    assert!(matches!(app.state, super::SessionState::SoftLocked { .. }));
+    app.copy_password = "attacker password".into();
+    let copy = directory.path().join("copy.snotes");
+    assert_eq!(
+        app.save_copy_current(copy.clone()),
+        Err(VaultError::InvalidPasswordOrKey)
+    );
+    assert!(!copy.exists());
+    assert!(matches!(app.state, super::SessionState::SoftLocked { .. }));
+}
+
+#[test]
+fn locking_clears_password_fields_search_and_secret_dialogs() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::vault::VaultService::testing()
+        .create(directory.path().join("vault.snotes"), "original password")
+        .unwrap();
+    let mut app = app_with_session(session);
+    app.search = "secret query".into();
+    app.new_password = "new secret".into();
+    app.confirm_new_password = "new secret".into();
+    app.copy_password = "copy secret".into();
+    app.show_change_password = true;
+    app.show_save_copy = true;
+    app.delete_confirmation = Some(Uuid::new_v4());
+    app.lock_current();
+    assert!(app.search.is_empty());
+    assert!(app.new_password.is_empty());
+    assert!(app.confirm_new_password.is_empty());
+    assert!(app.copy_password.is_empty());
+    assert!(!app.show_change_password);
+    assert!(!app.show_save_copy);
+    assert!(app.delete_confirmation.is_none());
+}
+
+#[test]
+fn soft_locked_copy_recovers_deleted_vault_only_with_original_password() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("vault.snotes");
+    let service = crate::vault::VaultService::testing();
+    let mut session = service.create(&path, "original password").unwrap();
+    session.vault.notes.push(Note {
+        id: Uuid::new_v4(),
+        title: "private".into(),
+        body: "secret body".into(),
+        modified_at: 0,
+    });
+    session.dirty = true;
+    let mut app = app_with_session(session);
+    std::fs::remove_file(&path).unwrap();
+    app.lock_current();
+    app.password = "original password".into();
+    app.copy_password = "replacement password".into();
+    let copy = directory.path().join("copy.snotes");
+    assert_eq!(app.save_copy_current(copy.clone()), Ok(true));
+    assert!(matches!(app.state, super::SessionState::Locked { .. }));
+    assert_eq!(
+        service
+            .open(&copy, "replacement password")
+            .unwrap()
+            .vault
+            .notes[0]
+            .body,
+        "secret body"
+    );
+    assert!(app.password.is_empty());
+    assert!(app.copy_password.is_empty());
+}
+
+#[test]
+fn locking_removes_editor_undo_history() {
+    use eframe::egui::{
+        Id,
+        text::{CCursor, CCursorRange},
+        text_edit::TextEditState,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::vault::VaultService::testing()
+        .create(directory.path().join("vault.snotes"), "original password")
+        .unwrap();
+    let mut app = app_with_session(session);
+    let id = Id::new("test-editor");
+    let mut state = TextEditState::default();
+    let mut undoer = state.undoer();
+    undoer.feed_state(
+        0.0,
+        &(CCursorRange::one(CCursor::new(0)), "secret body".to_owned()),
+    );
+    state.set_undoer(undoer);
+    state.store(&app.egui_ctx, id);
+    assert!(TextEditState::load(&app.egui_ctx, id).is_some());
+    app.lock_current();
+    assert!(TextEditState::load(&app.egui_ctx, id).is_none());
+}
+
+#[test]
+fn failed_password_change_clears_password_undo_history() {
+    use eframe::egui::{
+        Id,
+        text::{CCursor, CCursorRange},
+        text_edit::TextEditState,
+    };
+    for (password, confirmation, remove_original) in [
+        ("replacement password", "mismatch", false),
+        ("x", "x", false),
+        ("replacement password", "replacement password", true),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.snotes");
+        let session = crate::vault::VaultService::testing()
+            .create(&path, "original password")
+            .unwrap();
+        let mut app = app_with_session(session);
+        app.new_password = password.into();
+        app.confirm_new_password = confirmation.into();
+        let id = Id::new("new-password");
+        let mut state = TextEditState::default();
+        let mut undoer = state.undoer();
+        undoer.feed_state(
+            0.0,
+            &(CCursorRange::one(CCursor::new(0)), password.to_owned()),
+        );
+        state.set_undoer(undoer);
+        state.store(&app.egui_ctx, id);
+        if remove_original {
+            std::fs::remove_file(&path).unwrap();
+        }
+        assert!(!app.change_password_current());
+        assert!(app.new_password.is_empty());
+        assert!(app.confirm_new_password.is_empty());
+        assert!(TextEditState::load(&app.egui_ctx, id).is_none());
+    }
+}

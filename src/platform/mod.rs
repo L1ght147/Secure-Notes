@@ -44,6 +44,7 @@ impl PlatformSecurity for NativePlatformSecurity {
         subscribe_session_events()
     }
 
+    #[cfg(feature = "desktop")]
     fn set_clipboard_with_expiry(&self, text: &str, expiry: Duration) -> Result<(), PlatformError> {
         let mut clipboard =
             arboard::Clipboard::new().map_err(|_| PlatformError::ClipboardUnavailable)?;
@@ -61,15 +62,26 @@ impl PlatformSecurity for NativePlatformSecurity {
             .map_err(|_| PlatformError::ClipboardUnavailable)?;
         Ok(())
     }
+    #[cfg(not(feature = "desktop"))]
+    fn set_clipboard_with_expiry(
+        &self,
+        _text: &str,
+        _expiry: Duration,
+    ) -> Result<(), PlatformError> {
+        Err(PlatformError::ClipboardUnavailable)
+    }
 }
 
+#[cfg(any(feature = "desktop", test))]
 trait ClipboardBackend: Send + Sync {
     fn text(&self) -> Option<String>;
     fn clear(&self) -> Result<(), ()>;
 }
 
+#[cfg(feature = "desktop")]
 struct SystemClipboard;
 
+#[cfg(feature = "desktop")]
 impl ClipboardBackend for SystemClipboard {
     fn text(&self) -> Option<String> {
         arboard::Clipboard::new().ok()?.get_text().ok()
@@ -82,6 +94,7 @@ impl ClipboardBackend for SystemClipboard {
     }
 }
 
+#[cfg(any(feature = "desktop", test))]
 fn clear_clipboard_if_unchanged(
     clipboard: &dyn ClipboardBackend,
     expected: blake3::Hash,
@@ -149,41 +162,67 @@ fn subscribe_session_events() -> Result<Receiver<SessionEvent>, PlatformError> {
 #[cfg(windows)]
 mod windows_events {
     use super::{PlatformError, SessionEvent, decode_session_event};
-    use std::sync::{OnceLock, mpsc};
+    use std::sync::{Mutex, mpsc};
     use windows::{
         Win32::{
             Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
             System::{
                 LibraryLoader::GetModuleHandleW,
-                RemoteDesktop::{NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification},
+                RemoteDesktop::{
+                    NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification,
+                    WTSUnRegisterSessionNotification,
+                },
             },
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG,
+                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, MSG,
                 RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
             },
         },
         core::w,
     };
 
-    static EVENT_SENDER: OnceLock<mpsc::Sender<SessionEvent>> = OnceLock::new();
+    static EVENT_SENDER: Mutex<Option<mpsc::Sender<SessionEvent>>> = Mutex::new(None);
 
     pub(super) fn subscribe() -> Result<mpsc::Receiver<SessionEvent>, PlatformError> {
         let (sender, receiver) = mpsc::channel();
-        EVENT_SENDER
-            .set(sender)
-            .map_err(|_| PlatformError::SessionEventsUnavailable)?;
-        std::thread::Builder::new()
+        {
+            let mut slot = EVENT_SENDER
+                .lock()
+                .map_err(|_| PlatformError::SessionEventsUnavailable)?;
+            if slot.is_some() {
+                return Err(PlatformError::SessionEventsUnavailable);
+            }
+            *slot = Some(sender);
+        }
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
             .name("secure-notes-session-events".into())
-            .spawn(message_loop)
-            .map_err(|_| PlatformError::SessionEventsUnavailable)?;
+            .spawn(move || {
+                if message_loop(&ready_sender).is_err() {
+                    let _ = ready_sender.send(Err(PlatformError::SessionEventsUnavailable));
+                }
+                if let Ok(mut slot) = EVENT_SENDER.lock() {
+                    *slot = None;
+                }
+            });
+        if spawned.is_err() {
+            if let Ok(mut slot) = EVENT_SENDER.lock() {
+                *slot = None;
+            }
+            return Err(PlatformError::SessionEventsUnavailable);
+        }
+        ready_receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| PlatformError::SessionEventsUnavailable)??;
         Ok(receiver)
     }
 
-    fn message_loop() {
+    fn message_loop(
+        ready: &mpsc::SyncSender<Result<(), PlatformError>>,
+    ) -> Result<(), PlatformError> {
         unsafe {
-            let Ok(module) = GetModuleHandleW(None) else {
-                return;
-            };
+            let module =
+                GetModuleHandleW(None).map_err(|_| PlatformError::SessionEventsUnavailable)?;
             let instance = HINSTANCE(module.0);
             let class = WNDCLASSW {
                 lpfnWndProc: Some(window_proc),
@@ -192,9 +231,9 @@ mod windows_events {
                 ..Default::default()
             };
             if RegisterClassW(&class) == 0 {
-                return;
+                return Err(PlatformError::SessionEventsUnavailable);
             }
-            let Ok(window) = CreateWindowExW(
+            let window = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 w!("SecureNotesSessionEvents"),
                 w!(""),
@@ -207,17 +246,32 @@ mod windows_events {
                 None,
                 Some(instance),
                 None,
-            ) else {
-                return;
-            };
+            )
+            .map_err(|_| PlatformError::SessionEventsUnavailable)?;
             if WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION).is_err() {
-                return;
+                let _ = DestroyWindow(window);
+                return Err(PlatformError::SessionEventsUnavailable);
+            }
+            if ready.send(Ok(())).is_err() {
+                let _ = WTSUnRegisterSessionNotification(window);
+                let _ = DestroyWindow(window);
+                return Err(PlatformError::SessionEventsUnavailable);
             }
             let mut message = MSG::default();
-            while GetMessageW(&mut message, None, 0, 0).as_bool() {
+            let result = loop {
+                let status = GetMessageW(&mut message, None, 0, 0).0;
+                if status == -1 {
+                    break Err(PlatformError::SessionEventsUnavailable);
+                }
+                if status == 0 {
+                    break Ok(());
+                }
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
-            }
+            };
+            let _ = WTSUnRegisterSessionNotification(window);
+            let _ = DestroyWindow(window);
+            result
         }
     }
 
@@ -228,7 +282,8 @@ mod windows_events {
         lparam: LPARAM,
     ) -> LRESULT {
         if let Some(event) = decode_session_event(message, wparam.0 as u32)
-            && let Some(sender) = EVENT_SENDER.get()
+            && let Ok(slot) = EVENT_SENDER.lock()
+            && let Some(sender) = slot.as_ref()
         {
             let _ = sender.send(event);
         }

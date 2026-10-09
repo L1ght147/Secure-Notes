@@ -2,6 +2,11 @@ name: Parser fuzz smoke test
 
 on:
   workflow_dispatch:
+  push:
+    branches: [dev]
+    paths: ["src/vault/**", "src/platform/**", "fuzz/**", "Cargo.toml", "Cargo.lock", ".github/workflows/fuzz.yml"]
+  pull_request:
+    paths: ["src/vault/**", "src/platform/**", "fuzz/**", "Cargo.toml", "Cargo.lock", ".github/workflows/fuzz.yml"]
   schedule:
     - cron: "17 3 * * 1"
 
@@ -10,6 +15,7 @@ permissions:
 
 jobs:
   fuzz:
+    timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

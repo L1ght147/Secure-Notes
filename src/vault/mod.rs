@@ -2,7 +2,7 @@
 
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     ptr::NonNull,
     slice,
@@ -40,6 +40,35 @@ pub struct Note {
     pub title: String,
     pub body: String,
     pub modified_at: i64,
+}
+
+impl Drop for Note {
+    fn drop(&mut self) {
+        clear_secret(&mut self.title);
+        clear_secret(&mut self.body);
+    }
+}
+
+/// Wipes the current allocation, including spare capacity, before clearing it.
+pub(crate) fn clear_secret(secret: &mut String) {
+    unsafe { sodium::sodium_memzero(secret.as_mut_ptr().cast(), secret.capacity()) };
+    secret.clear();
+}
+
+/// Plaintext serialization buffers must also be wiped on early error returns.
+struct Plaintext(Vec<u8>);
+
+impl std::ops::Deref for Plaintext {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Drop for Plaintext {
+    fn drop(&mut self) {
+        unsafe { sodium::sodium_memzero(self.0.as_mut_ptr().cast(), self.0.capacity()) };
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -203,24 +232,24 @@ impl VaultCodec {
             &container[..WRAP_AAD_LEN],
         )
         .map_err(|_| VaultError::InvalidPasswordOrKey)?;
+        let key_bytes = Plaintext(key_bytes);
         let data_key = SecretBytes::from_slice(&key_bytes)?;
-        wipe_vec(key_bytes);
 
         let ciphertext = &container[HEADER_LEN..];
-        let plaintext = aead_decrypt(
-            ciphertext,
-            data_key.expose(),
-            &header.payload_nonce,
-            &container[..HEADER_LEN],
-        )
-        .map_err(|_| VaultError::IntegrityViolation)?;
+        let plaintext = Plaintext(
+            aead_decrypt(
+                ciphertext,
+                data_key.expose(),
+                &header.payload_nonce,
+                &container[..HEADER_LEN],
+            )
+            .map_err(|_| VaultError::IntegrityViolation)?,
+        );
         if plaintext.len() > PAYLOAD_LIMIT {
-            wipe_vec(plaintext);
             return Err(VaultError::PayloadTooLarge);
         }
         let decoded =
             serde_json::from_slice::<Vault>(&plaintext).map_err(|_| VaultError::IntegrityViolation);
-        wipe_vec(plaintext);
         let vault = decoded?;
         validate_schema(&vault)?;
         Ok((vault, data_key))
@@ -234,9 +263,9 @@ impl VaultCodec {
     ) -> Result<Vec<u8>, VaultError> {
         validate_schema(vault)?;
         let mut header = Header::parse(existing, self.profile)?;
-        let plaintext = serde_json::to_vec(vault).map_err(|_| VaultError::IntegrityViolation)?;
+        let plaintext =
+            Plaintext(serde_json::to_vec(vault).map_err(|_| VaultError::IntegrityViolation)?);
         if plaintext.len() > PAYLOAD_LIMIT {
-            wipe_vec(plaintext);
             return Err(VaultError::PayloadTooLarge);
         }
         header.payload_nonce = random_array()?;
@@ -248,7 +277,6 @@ impl VaultCodec {
             &header.payload_nonce,
             &serialized,
         );
-        wipe_vec(plaintext);
         let encrypted = encrypted?;
         let mut container = Vec::with_capacity(HEADER_LEN + encrypted.len());
         container.extend_from_slice(&serialized);
@@ -276,9 +304,9 @@ impl VaultCodec {
         vault_id: [u8; 16],
     ) -> Result<Vec<u8>, VaultError> {
         validate_schema(vault)?;
-        let plaintext = serde_json::to_vec(vault).map_err(|_| VaultError::IntegrityViolation)?;
+        let plaintext =
+            Plaintext(serde_json::to_vec(vault).map_err(|_| VaultError::IntegrityViolation)?);
         if plaintext.len() > PAYLOAD_LIMIT {
-            wipe_vec(plaintext);
             return Err(VaultError::PayloadTooLarge);
         }
 
@@ -312,7 +340,6 @@ impl VaultCodec {
             &header.payload_nonce,
             &serialized,
         );
-        wipe_vec(plaintext);
         let encrypted = encrypted?;
 
         let mut container = Vec::with_capacity(HEADER_LEN + encrypted.len());
@@ -328,6 +355,8 @@ pub struct VaultSession {
     pub data_key: SecretBytes,
     pub fingerprint: [u8; 32],
     pub dirty: bool,
+    // Only ciphertext: permits reauthentication even if the original file is gone.
+    authentication_header: [u8; HEADER_LEN],
 }
 
 pub struct VaultService {
@@ -344,7 +373,7 @@ impl Default for VaultService {
 
 impl VaultService {
     #[cfg(test)]
-    fn testing() -> Self {
+    pub(crate) fn testing() -> Self {
         Self {
             codec: VaultCodec::new(KdfProfile::testing()),
         }
@@ -356,6 +385,7 @@ impl VaultService {
         password: &str,
     ) -> Result<VaultSession, VaultError> {
         let path = path.as_ref();
+        let _lock = acquire_write_lock(path)?;
         if path.exists() {
             return Err(VaultError::FileConflict);
         }
@@ -368,6 +398,7 @@ impl VaultService {
             data_key,
             fingerprint: fingerprint(&container)?,
             dirty: false,
+            authentication_header: container[..HEADER_LEN].try_into().unwrap(),
         })
     }
 
@@ -382,6 +413,7 @@ impl VaultService {
             data_key,
             fingerprint,
             dirty: false,
+            authentication_header: container[..HEADER_LEN].try_into().unwrap(),
         })
     }
 
@@ -394,11 +426,7 @@ impl VaultService {
         session: &mut VaultSession,
         password: &str,
     ) -> Result<(), VaultError> {
-        let existing = self.current_container(session)?;
-        let (_, authenticated_key) = self.codec.decrypt(&existing, password)?;
-        if !constant_time_equal(authenticated_key.expose(), session.data_key.expose()) {
-            return Err(VaultError::InvalidPasswordOrKey);
-        }
+        self.authenticate_session(session, password)?;
         self.save_inner(session, None)
     }
 
@@ -407,6 +435,7 @@ impl VaultService {
         session: &mut VaultSession,
         new_password: &str,
     ) -> Result<(), VaultError> {
+        let _lock = acquire_write_lock(&session.path)?;
         let existing = self.current_container(session)?;
         let container = self.codec.encrypt_rewrapped(
             &existing,
@@ -414,7 +443,14 @@ impl VaultService {
             &session.data_key,
             new_password,
         )?;
-        atomic_write(&session.path, &container, None, true)?;
+        atomic_write_checked(
+            &session.path,
+            &container,
+            None,
+            true,
+            Some(session.fingerprint),
+        )?;
+        session.authentication_header = container[..HEADER_LEN].try_into().unwrap();
         session.fingerprint = fingerprint(&container)?;
         session.dirty = false;
         Ok(())
@@ -426,7 +462,9 @@ impl VaultService {
         new_path: impl AsRef<Path>,
         password: &str,
     ) -> Result<(), VaultError> {
+        validate_password(password)?;
         let new_path = new_path.as_ref();
+        let _lock = acquire_write_lock(new_path)?;
         if new_path.exists() {
             return Err(VaultError::FileConflict);
         }
@@ -437,7 +475,43 @@ impl VaultService {
         session.path = new_path.to_path_buf();
         session.fingerprint = fingerprint(&container)?;
         session.dirty = false;
+        session.authentication_header = container[..HEADER_LEN].try_into().unwrap();
         Ok(())
+    }
+
+    pub fn authenticate_session(
+        &self,
+        session: &VaultSession,
+        password: &str,
+    ) -> Result<(), VaultError> {
+        let bytes = &session.authentication_header;
+        let salt = bytes[28..44].try_into().unwrap();
+        let nonce = bytes[64..88].try_into().unwrap();
+        let kek = derive_key(password, &salt, self.codec.profile)?;
+        let key = Plaintext(
+            aead_decrypt(
+                &bytes[88..136],
+                kek.expose(),
+                &nonce,
+                &bytes[..WRAP_AAD_LEN],
+            )
+            .map_err(|_| VaultError::InvalidPasswordOrKey)?,
+        );
+        if !constant_time_equal(&key, session.data_key.expose()) {
+            return Err(VaultError::InvalidPasswordOrKey);
+        }
+        Ok(())
+    }
+
+    pub fn save_copy_after_reauthentication(
+        &self,
+        session: &mut VaultSession,
+        new_path: impl AsRef<Path>,
+        original_password: &str,
+        new_password: &str,
+    ) -> Result<(), VaultError> {
+        self.authenticate_session(session, original_password)?;
+        self.save_copy(session, new_path, new_password)
     }
 
     fn save_inner(
@@ -445,11 +519,18 @@ impl VaultService {
         session: &mut VaultSession,
         fault: Option<FaultPoint>,
     ) -> Result<(), VaultError> {
+        let _lock = acquire_write_lock(&session.path)?;
         let existing = self.current_container(session)?;
         let container = self
             .codec
             .encrypt_updated(&existing, &session.vault, &session.data_key)?;
-        atomic_write(&session.path, &container, fault, true)?;
+        atomic_write_checked(
+            &session.path,
+            &container,
+            fault,
+            true,
+            Some(session.fingerprint),
+        )?;
         session.fingerprint = fingerprint(&container)?;
         session.dirty = false;
         Ok(())
@@ -497,12 +578,45 @@ impl FaultPoint {
 }
 
 fn read_container(path: &Path) -> Result<Vec<u8>, VaultError> {
-    let metadata = fs::metadata(path).map_err(|_| VaultError::ReadFailed)?;
     let max_size = HEADER_LEN as u64 + PAYLOAD_LIMIT as u64 + TAG_LEN as u64;
+    let file = fs::File::open(path).map_err(|_| VaultError::ReadFailed)?;
+    let metadata = file.metadata().map_err(|_| VaultError::ReadFailed)?;
+    if !metadata.is_file() {
+        return Err(VaultError::ReadFailed);
+    }
     if metadata.len() > max_size {
         return Err(VaultError::PayloadTooLarge);
     }
-    fs::read(path).map_err(|_| VaultError::ReadFailed)
+    let mut bytes = Vec::new();
+    file.take(max_size + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| VaultError::ReadFailed)?;
+    if bytes.len() as u64 > max_size {
+        return Err(VaultError::PayloadTooLarge);
+    }
+    Ok(bytes)
+}
+
+// Keep the sidecar inode: removing it on unlock would permit two concurrent locks.
+fn acquire_write_lock(path: &Path) -> Result<fs::File, VaultError> {
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let parent = resolved.parent().ok_or(VaultError::WriteFailed)?;
+    let name = resolved.file_name().ok_or(VaultError::WriteFailed)?;
+    let mut lock_name = std::ffi::OsString::from(".");
+    lock_name.push(name);
+    lock_name.push(".lock");
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(parent.join(lock_name))
+        .map_err(|_| VaultError::WriteFailed)?;
+    file.try_lock().map_err(|_| VaultError::FileConflict)?;
+    Ok(file)
 }
 
 fn fingerprint(bytes: &[u8]) -> Result<[u8; 32], VaultError> {
@@ -537,6 +651,16 @@ fn atomic_write(
     fault: Option<FaultPoint>,
     replace_existing: bool,
 ) -> Result<(), VaultError> {
+    atomic_write_checked(path, ciphertext, fault, replace_existing, None)
+}
+
+fn atomic_write_checked(
+    path: &Path,
+    ciphertext: &[u8],
+    fault: Option<FaultPoint>,
+    replace_existing: bool,
+    expected: Option<[u8; 32]>,
+) -> Result<(), VaultError> {
     let parent = path.parent().ok_or(VaultError::WriteFailed)?;
     let file_name = path
         .file_name()
@@ -568,6 +692,12 @@ fn atomic_write(
         inject_fault(fault, FaultPoint::AfterSync)?;
         drop(file);
         inject_fault(fault, FaultPoint::BeforeReplace)?;
+        if let Some(expected) = expected {
+            let current = read_container(path).map_err(|_| VaultError::FileConflict)?;
+            if fingerprint(&current)? != expected {
+                return Err(VaultError::FileConflict);
+            }
+        }
         replace_file(&temporary, path, replace_existing)?;
         inject_fault(fault, FaultPoint::AfterReplace)?;
         sync_parent(parent)?;

@@ -1,5 +1,6 @@
 //! Stable layout measurements for the Calm Workspace shell.
 
+#[cfg(any(windows, test))]
 pub fn center_window_in_display(display_size: [f32; 2], window_size: [f32; 2]) -> [f32; 2] {
     [
         ((display_size[0] - window_size[0]) / 2.0).max(0.0),
